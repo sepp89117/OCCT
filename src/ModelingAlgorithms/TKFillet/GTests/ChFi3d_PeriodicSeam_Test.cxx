@@ -577,6 +577,48 @@ TEST(ChFi3d_PeriodicSeamTest, AllPhysicalEdgesAcrossPeriodicCornersRadiusTwo)
 
 //==================================================================================================
 
+TEST(ChFi3d_PeriodicSeamTest, AllButBottomRimWithUpperQuarterLastRadiusTwo)
+{
+  TopoDS_Shape aInput;
+  BRep_Builder aBuilder;
+  ASSERT_TRUE(BRepTools::Read(aInput, fixturePath().ToCString(), aBuilder));
+
+  const double aRadius = 22.866527557373047;
+  const gp_Pnt aEndpoints[][2] = {
+    {{0.0, aRadius, 10.0}, {aRadius, 0.0, 10.0}},
+    {{aRadius, 0.0, 10.0}, {aRadius, 0.0, 20.0}},
+    {{aRadius, 0.0, 20.0}, {0.0, aRadius, 20.0}},
+    {{0.0, aRadius, 10.0}, {0.0, aRadius, 20.0}},
+    {{0.0, aRadius, 10.0}, {0.0, 0.0, 10.0}},
+    {{0.0, 0.0, 10.0}, {aRadius, 0.0, 10.0}},
+    {{0.0, 0.0, 10.0}, {0.0, 0.0, 20.0}},
+    {{0.0, 0.0, 20.0}, {aRadius, 0.0, 20.0}},
+    {{0.0, aRadius, 20.0}, {0.0, 0.0, 20.0}}};
+  const int anOrder[] = {0, 1, 3, 4, 5, 6, 7, 8, 2};
+  TopoDS_Edge aSeeds[9];
+  BRepFilletAPI_MakeFillet aFillet(aInput, ChFi3d_Rational);
+  for (int anIndex : anOrder)
+  {
+    aSeeds[anIndex] = findEdge(aInput, aEndpoints[anIndex][0], aEndpoints[anIndex][1]);
+    ASSERT_FALSE(aSeeds[anIndex].IsNull()) << anIndex;
+    aFillet.Add(2.0, aSeeds[anIndex]);
+  }
+
+  aFillet.Build();
+  ASSERT_TRUE(aFillet.IsDone());
+  ASSERT_NO_FATAL_FAILURE(checkCompleteSolid(aFillet.Shape()));
+
+  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> aResultEdges;
+  TopExp::MapShapes(aFillet.Shape(), TopAbs_EDGE, aResultEdges);
+  for (const TopoDS_Edge& aSeed : aSeeds)
+  {
+    EXPECT_FALSE(aResultEdges.Contains(aSeed));
+    EXPECT_FALSE(aFillet.Generated(aSeed).IsEmpty());
+  }
+}
+
+//==================================================================================================
+
 TEST(ChFi3d_PeriodicSeamTest, RemoteCornerStripesRemainDistinctRadiusTwo)
 {
   TopoDS_Shape aInput;

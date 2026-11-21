@@ -2186,7 +2186,22 @@ void TopOpeBRepBuild_Builder::FillShape(const TopoDS_Shape&                   S1
   {
     aSubShape = ex1.Current();
 
-    if (!myDataStructure->HasShape(aSubShape))
+    bool hasTrackedSubShape = myDataStructure->HasShape(aSubShape);
+    if (!hasTrackedSubShape && aSubShape.ShapeType() == TopAbs_WIRE)
+    {
+      // An unindexed wire can contain edges that the data structure tracks.
+      // Rebuild it from those edges instead of restoring its obsolete contour.
+      for (TopExp_Explorer anEdgeIt(aSubShape, TopAbs_EDGE); anEdgeIt.More(); anEdgeIt.Next())
+      {
+        if (myDataStructure->HasShape(anEdgeIt.Current(), false))
+        {
+          hasTrackedSubShape = true;
+          break;
+        }
+      }
+    }
+
+    if (!hasTrackedSubShape)
     {
       // SubShape is not in DS : classify it with shapes of LS2
       bool keep = KeepShape(aSubShape, LS2, ToBuild1);
