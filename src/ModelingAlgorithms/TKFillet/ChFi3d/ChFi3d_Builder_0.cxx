@@ -4219,11 +4219,10 @@ bool ChFi3d_ComputeCurves(const occ::handle<Adaptor3d_Surface>& S1,
   // classic intersections have failed, the path is approached in vain.
 
   // A raw midpoint between UVs on opposite sides of a face seam can seed
-  // the walker on the wrong periodic sheet. The forward seam pcurve gives
-  // the face's topological reference sheet for this interpolation only.
+  // the walker on the wrong periodic sheet. The upper seam parameter branch gives
+  // a consistent parameter sheet for this interpolation only.
   const auto seedSeam = [](const occ::handle<Adaptor3d_Surface>& surface,
-                           bool isU,
-                           double& forwardParameter) {
+                           bool isU) {
     if (isU ? !surface->IsUPeriodic() : !surface->IsVPeriodic())
       return 0.0;
     const auto faceSurface = occ::down_cast<BRepAdaptor_Surface>(surface);
@@ -4250,17 +4249,15 @@ bool ChFi3d_ComputeCurves(const occ::handle<Adaptor3d_Surface>& S1,
       const double across = isU ? p1.Y() - p2.Y() : p1.X() - p2.X();
       if (std::abs(std::abs(along) - period) <= 1.e-6 && std::abs(across) <= 1.e-6)
       {
-        forwardParameter = isU ? p1.X() : p1.Y();
         return period;
       }
     }
     return 0.0;
   };
-  double seamAnchor[4] = {};
-  const double seedPeriods[4] = {seedSeam(S1, true, seamAnchor[0]),
-                                 seedSeam(S1, false, seamAnchor[1]),
-                                 seedSeam(S2, true, seamAnchor[2]),
-                                 seedSeam(S2, false, seamAnchor[3])};
+  const double seedPeriods[4] = {seedSeam(S1, true),
+                                 seedSeam(S1, false),
+                                 seedSeam(S2, true),
+                                 seedSeam(S2, false)};
   double seedStart[4] = {Pardeb(1), Pardeb(2), Pardeb(3), Pardeb(4)};
   double seedEnd[4]   = {Parfin(1), Parfin(2), Parfin(3), Parfin(4)};
   for (int j = 0; j < 4; ++j)
@@ -4270,8 +4267,7 @@ bool ChFi3d_ComputeCurves(const occ::handle<Adaptor3d_Surface>& S1,
     const double shift        = std::round((seedEnd[j] - seedStart[j]) / seedPeriods[j]) * seedPeriods[j];
     const double endNearStart = seedEnd[j] - shift;
     const double startNearEnd = seedStart[j] + shift;
-    if (std::abs(0.5 * (startNearEnd + seedEnd[j]) - seamAnchor[j])
-        < std::abs(0.5 * (seedStart[j] + endNearStart) - seamAnchor[j]))
+    if (seedStart[j] < seedEnd[j])
       seedStart[j] = startNearEnd;
     else
       seedEnd[j] = endNearStart;
