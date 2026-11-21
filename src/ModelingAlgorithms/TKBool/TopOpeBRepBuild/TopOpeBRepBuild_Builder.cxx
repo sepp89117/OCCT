@@ -1979,7 +1979,10 @@ void TopOpeBRepBuild_Builder::SplitShapes(TopOpeBRepTool_ShapeExplorer& Ex,
                 continue;
               const TopoDS_Face&              sourceFace = TopoDS::Face(sourceShape);
               const occ::handle<Geom_Surface> surface    = BRep_Tool::Surface(sourceFace);
+              // A split of an existing seam keeps its other face use.
+              // Only a non-seam edge newly promoted to a seam loses that use.
               if (!surface.IsNull() && surface->IsUPeriodic()
+                  && !BRep_Tool::IsClosed(TopoDS::Edge(aShape), sourceFace)
                   && BRep_Tool::IsClosed(TopoDS::Edge(newShape), sourceFace))
               {
                 isPeriodicSeam = true;
