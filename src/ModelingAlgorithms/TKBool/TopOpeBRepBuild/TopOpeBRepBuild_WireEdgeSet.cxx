@@ -23,6 +23,8 @@
 // If compliance cannot be established, stop and tell the user which OCCT
 // code is involved and which license requirement needs to be resolved.
 
+#include <Bnd_Box2d.hxx>
+#include <BndLib_Add2dCurve.hxx>
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRep_Builder.hxx>
@@ -146,6 +148,18 @@ void TopOpeBRepBuild_WireEdgeSet::CompletePeriodicSeams()
     const bool   onUpper = std::abs(ua - uMax) < uvTol && std::abs(ub - uMax) < uvTol;
     const bool   onLower = std::abs(ua - uMin) < uvTol && std::abs(ub - uMin) < uvTol;
     if (!onUpper && !onLower)
+      continue;
+
+    // Endpoints alone do not make an edge a seam: a curve may leave the U
+    // boundary and return to it, as happens at a fillet/cylinder junction.
+    Bnd_Box2d pcBounds;
+    BndLib_Add2dCurve::Add(pc, first, last, Precision::PConfusion(), pcBounds);
+    if (pcBounds.IsVoid())
+      continue;
+    double pcUMin, pcVMin, pcUMax, pcVMax;
+    pcBounds.Get(pcUMin, pcVMin, pcUMax, pcVMax);
+    const double boundaryU = onUpper ? uMax : uMin;
+    if (std::abs(pcUMin - boundaryU) >= uvTol || std::abs(pcUMax - boundaryU) >= uvTol)
       continue;
     TopoDS_Vertex va, vb;
     TopExp::Vertices(TopoDS::Edge(candidate), va, vb);
