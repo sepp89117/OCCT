@@ -72,19 +72,19 @@ namespace
 //! Returns the boundary vertex at the classifier's edge parameter, or null.
 TopoDS_Vertex classifiedVertex(const BRepClass_FaceClassifier& theClassifier);
 
-//! Returns true for equivalent seam points or a shared boundary vertex.
-bool isSeamPoint(const TopoDS_Face&        theFace,
-                 const IntSurf_PntOn2S&    thePoint,
-                 BRepClass_FaceClassifier& theFirstClassifier,
-                 BRepClass_FaceClassifier& theSecondClassifier);
+//! Returns true for equivalent seam or singular-boundary points.
+bool isEquivalentBoundaryPoint(const TopoDS_Face&        theFace,
+                               const IntSurf_PntOn2S&    thePoint,
+                               BRepClass_FaceClassifier& theFirstClassifier,
+                               BRepClass_FaceClassifier& theSecondClassifier);
 
-//! Checks every walking point of a retained interval for seam equivalence.
-bool isSeamLine(const TopoDS_Face&                theFace,
-                const occ::handle<IntPatch_Line>& theLine,
-                const double                      theFirst,
-                const double                      theLast,
-                BRepClass_FaceClassifier&         theFirstClassifier,
-                BRepClass_FaceClassifier&         theSecondClassifier);
+//! Checks every walking point of a retained interval for boundary equivalence.
+bool isEquivalentBoundaryLine(const TopoDS_Face&                theFace,
+                              const occ::handle<IntPatch_Line>& theLine,
+                              const double                      theFirst,
+                              const double                      theLast,
+                              BRepClass_FaceClassifier&         theFirstClassifier,
+                              BRepClass_FaceClassifier&         theSecondClassifier);
 
 //! Checks surface self-intersections inside both copies of a face domain.
 class BOPAlgo_FaceSelfIntersect : public BOPAlgo_ParallelAlgo
@@ -150,10 +150,10 @@ TopoDS_Vertex classifiedVertex(const BRepClass_FaceClassifier& theClassifier)
 
 //==================================================================================================
 
-bool isSeamPoint(const TopoDS_Face&        theFace,
-                 const IntSurf_PntOn2S&    thePoint,
-                 BRepClass_FaceClassifier& theFirstClassifier,
-                 BRepClass_FaceClassifier& theSecondClassifier)
+bool isEquivalentBoundaryPoint(const TopoDS_Face&        theFace,
+                               const IntSurf_PntOn2S&    thePoint,
+                               BRepClass_FaceClassifier& theFirstClassifier,
+                               BRepClass_FaceClassifier& theSecondClassifier)
 {
   double aU1, aV1, aU2, aV2;
   thePoint.Parameters(aU1, aV1, aU2, aV2);
@@ -165,12 +165,28 @@ bool isSeamPoint(const TopoDS_Face&        theFace,
   }
   const TopoDS_Edge& aFirstEdge  = theFirstClassifier.Edge().Edge();
   const TopoDS_Edge& aSecondEdge = theSecondClassifier.Edge().Edge();
-  if (!aFirstEdge.IsNull() && aFirstEdge.IsSame(aSecondEdge)
-      && BRep_Tool::IsClosed(aFirstEdge, theFace) && BRep_Tool::SameParameter(aFirstEdge)
-      && std::abs(theFirstClassifier.EdgeParameter() - theSecondClassifier.EdgeParameter())
-           <= Precision::PConfusion())
+  if (!aFirstEdge.IsNull() && aFirstEdge.IsSame(aSecondEdge))
   {
-    return true;
+    if (BRep_Tool::Degenerated(aFirstEdge))
+    {
+      // All parameters of a degenerate edge map to its single 3D vertex.
+      const TopoDS_Vertex aVertex = TopExp::FirstVertex(aFirstEdge);
+      if (!aVertex.IsNull() && aVertex.IsSame(TopExp::LastVertex(aFirstEdge)))
+      {
+        const double aTolerance =
+          BRep_Tool::Tolerance(aVertex) + BRep_Tool::Tolerance(theFace) + Precision::Confusion();
+        if (thePoint.Value().Distance(BRep_Tool::Pnt(aVertex)) <= aTolerance)
+        {
+          return true;
+        }
+      }
+    }
+    if (BRep_Tool::IsClosed(aFirstEdge, theFace) && BRep_Tool::SameParameter(aFirstEdge)
+        && std::abs(theFirstClassifier.EdgeParameter() - theSecondClassifier.EdgeParameter())
+             <= Precision::PConfusion())
+    {
+      return true;
+    }
   }
   const TopoDS_Vertex aFirstVertex = classifiedVertex(theFirstClassifier);
   return !aFirstVertex.IsNull() && aFirstVertex.IsSame(classifiedVertex(theSecondClassifier));
@@ -178,12 +194,12 @@ bool isSeamPoint(const TopoDS_Face&        theFace,
 
 //==================================================================================================
 
-bool isSeamLine(const TopoDS_Face&                theFace,
-                const occ::handle<IntPatch_Line>& theLine,
-                const double                      theFirst,
-                const double                      theLast,
-                BRepClass_FaceClassifier&         theFirstClassifier,
-                BRepClass_FaceClassifier&         theSecondClassifier)
+bool isEquivalentBoundaryLine(const TopoDS_Face&                theFace,
+                              const occ::handle<IntPatch_Line>& theLine,
+                              const double                      theFirst,
+                              const double                      theLast,
+                              BRepClass_FaceClassifier&         theFirstClassifier,
+                              BRepClass_FaceClassifier&         theSecondClassifier)
 {
   const occ::handle<IntPatch_WLine> aLine = occ::down_cast<IntPatch_WLine>(theLine);
   if (aLine.IsNull() || theFirst < 1.0 || theLast > aLine->NbPnts() || theFirst > theLast)
@@ -198,29 +214,53 @@ bool isSeamLine(const TopoDS_Face&                theFace,
     return false;
   }
   const int aMiddle = aFirst + (aLast - aFirst) / 2;
-  if (!isSeamPoint(theFace, aLine->Point(aMiddle), theFirstClassifier, theSecondClassifier))
+  if (!isEquivalentBoundaryPoint(theFace,
+                                 aLine->Point(aMiddle),
+                                 theFirstClassifier,
+                                 theSecondClassifier))
   {
     return false;
   }
   // Retain the wrapper before the classifiers are reused for other points.
-  const TopoDS_Edge aSeam = theFirstClassifier.Edge().Edge();
-  if (aSeam.IsNull() || !aSeam.IsSame(theSecondClassifier.Edge().Edge())
-      || !BRep_Tool::IsClosed(aSeam, theFace) || !BRep_Tool::SameParameter(aSeam)
-      || std::abs(theFirstClassifier.EdgeParameter() - theSecondClassifier.EdgeParameter())
-           > Precision::PConfusion())
+  const TopoDS_Edge aBoundary = theFirstClassifier.Edge().Edge();
+  if (aBoundary.IsNull() || !aBoundary.IsSame(theSecondClassifier.Edge().Edge()))
   {
     return false;
   }
-  const TopoDS_Vertex aFirstVertex = TopExp::FirstVertex(aSeam);
-  const TopoDS_Vertex aLastVertex  = TopExp::LastVertex(aSeam);
+  // A degenerate boundary may appear as a walking line between distinct UV preimages.
+  const bool isDegenerate = BRep_Tool::Degenerated(aBoundary);
+  if (!isDegenerate
+      && (!BRep_Tool::IsClosed(aBoundary, theFace) || !BRep_Tool::SameParameter(aBoundary)
+          || std::abs(theFirstClassifier.EdgeParameter() - theSecondClassifier.EdgeParameter())
+               > Precision::PConfusion()))
+  {
+    return false;
+  }
+  const TopoDS_Vertex aFirstVertex = TopExp::FirstVertex(aBoundary);
+  const TopoDS_Vertex aLastVertex  = TopExp::LastVertex(aBoundary);
+  if (isDegenerate && (aFirstVertex.IsNull() || !aFirstVertex.IsSame(aLastVertex)))
+  {
+    return false;
+  }
+  const double aTolerance =
+    isDegenerate
+      ? BRep_Tool::Tolerance(aFirstVertex) + BRep_Tool::Tolerance(theFace) + Precision::Confusion()
+      : 0.0;
   for (int i = aFirst; i <= aLast; ++i)
   {
-    if (!isSeamPoint(theFace, aLine->Point(i), theFirstClassifier, theSecondClassifier))
+    if (!isEquivalentBoundaryPoint(theFace,
+                                   aLine->Point(i),
+                                   theFirstClassifier,
+                                   theSecondClassifier))
     {
       return false;
     }
-    if (!aSeam.IsSame(theFirstClassifier.Edge().Edge())
-        || !aSeam.IsSame(theSecondClassifier.Edge().Edge()))
+    if (isDegenerate && aLine->Point(i).Value().Distance(BRep_Tool::Pnt(aFirstVertex)) > aTolerance)
+    {
+      return false;
+    }
+    if (!aBoundary.IsSame(theFirstClassifier.Edge().Edge())
+        || !aBoundary.IsSame(theSecondClassifier.Edge().Edge()))
     {
       const TopoDS_Vertex aVertex = classifiedVertex(theFirstClassifier);
       if (aVertex.IsNull() || (!aVertex.IsSame(aFirstVertex) && !aVertex.IsSame(aLastVertex)))
@@ -330,10 +370,10 @@ void BOPAlgo_FaceSelfIntersect::Perform()
       return;
     }
     if (aFirstState != TopAbs_OUT && aSecondState != TopAbs_OUT
-        && !isSeamPoint(myF,
-                        anIntersection.Point(i).PntOn2S(),
-                        aFirstClassifier,
-                        aSecondClassifier))
+        && !isEquivalentBoundaryPoint(myF,
+                                      anIntersection.Point(i).PntOn2S(),
+                                      aFirstClassifier,
+                                      aSecondClassifier))
     {
       myHasInterference = true;
       myIsDone          = true;
@@ -353,12 +393,12 @@ void BOPAlgo_FaceSelfIntersect::Perform()
     {
       double aFirst, aLast;
       aConstructor.Part(j, aFirst, aLast);
-      if (!isSeamLine(myF,
-                      anIntersection.Line(i),
-                      aFirst,
-                      aLast,
-                      aFirstClassifier,
-                      aSecondClassifier))
+      if (!isEquivalentBoundaryLine(myF,
+                                    anIntersection.Line(i),
+                                    aFirst,
+                                    aLast,
+                                    aFirstClassifier,
+                                    aSecondClassifier))
       {
         myHasInterference = true;
         myIsDone          = true;
