@@ -3512,24 +3512,25 @@ void ChFi3d_StripeEdgeInter(const occ::handle<ChFiDS_Stripe>& theStripe1,
       Ishape21                           = aDat2->IndexOfS1();
       Ishape22                           = aDat2->IndexOfS2();
 
-      // Find those FaceInterferences able to intersect
+      // Index 0 means that the stripe has no face on that side.  It cannot be a common face.
+      // Comparing two absent faces would merge interference curves of unrelated corners.
       ChFiDS_FaceInterference aFI1, aFI2;
-      if (Ishape11 == Ishape21)
+      if (Ishape11 != 0 && Ishape11 == Ishape21)
       {
         aFI1 = aDat1->InterferenceOnS1();
         aFI2 = aDat2->InterferenceOnS1();
       }
-      else if (Ishape11 == Ishape22)
+      else if (Ishape11 != 0 && Ishape11 == Ishape22)
       {
         aFI1 = aDat1->InterferenceOnS1();
         aFI2 = aDat2->InterferenceOnS2();
       }
-      else if (Ishape12 == Ishape21)
+      else if (Ishape12 != 0 && Ishape12 == Ishape21)
       {
         aFI1 = aDat1->InterferenceOnS2();
         aFI2 = aDat2->InterferenceOnS1();
       }
-      else if (Ishape12 == Ishape22)
+      else if (Ishape12 != 0 && Ishape12 == Ishape22)
       {
         aFI1 = aDat1->InterferenceOnS2();
         aFI2 = aDat2->InterferenceOnS2();

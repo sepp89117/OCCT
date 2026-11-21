@@ -522,3 +522,48 @@ TEST(ChFi3d_PeriodicSeamTest, AllPhysicalEdgesAcrossPeriodicCornersRadiusTwo)
   }
   EXPECT_EQ(aSplineCorners, 2);
 }
+
+//==================================================================================================
+
+TEST(ChFi3d_PeriodicSeamTest, RemoteCornerStripesRemainDistinctRadiusTwo)
+{
+  TopoDS_Shape aInput;
+  BRep_Builder aBuilder;
+  ASSERT_TRUE(BRepTools::Read(aInput, fixturePath().ToCString(), aBuilder));
+
+  const double aRadius         = 22.866527557373047;
+  const gp_Pnt aEndpoints[][2] = {{{0.0, aRadius, 10.0}, {0.0, 0.0, 10.0}},
+                                  {{0.0, 0.0, 10.0}, {aRadius, 0.0, 10.0}},
+                                  {{aRadius, 0.0, 10.0}, {aRadius, 0.0, 20.0}},
+                                  {{0.0, aRadius, 10.0}, {0.0, aRadius, 20.0}},
+                                  {{0.0, 0.0, 10.0}, {0.0, 0.0, 20.0}}};
+  TopoDS_Edge  aSeeds[5];
+  for (int anIndex = 0; anIndex < 5; ++anIndex)
+  {
+    aSeeds[anIndex] = findEdge(aInput, aEndpoints[anIndex][0], aEndpoints[anIndex][1]);
+    ASSERT_FALSE(aSeeds[anIndex].IsNull()) << anIndex;
+  }
+
+  const int anOrders[][5] = {{0, 1, 2, 3, -1}, {3, 2, 1, 0, -1}, {0, 1, 4, 2, 3}};
+  for (const auto& anOrder : anOrders)
+  {
+    BRepFilletAPI_MakeFillet aFillet(aInput, ChFi3d_Rational);
+    for (const int anIndex : anOrder)
+    {
+      if (anIndex >= 0)
+      {
+        aFillet.Add(2.0, aSeeds[anIndex]);
+      }
+    }
+    aFillet.Build();
+    ASSERT_TRUE(aFillet.IsDone());
+    ASSERT_NO_FATAL_FAILURE(checkCompleteSolid(aFillet.Shape()));
+    for (const int anIndex : anOrder)
+    {
+      if (anIndex >= 0)
+      {
+        checkGeneratedRadius(aFillet, aSeeds[anIndex]);
+      }
+    }
+  }
+}
