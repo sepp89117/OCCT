@@ -56,6 +56,7 @@
 #include <TopAbs_ShapeEnum.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Face.hxx>
@@ -72,9 +73,106 @@
 
 //=================================================================================================
 
+struct PendingSeamInterference
+{
+  TopoDS_Face Face;
+  TopoDS_Edge Edge;
+  occ::handle<TopOpeBRepDS_CurvePointInterference> Interference;
+};
+
+// Return the FORWARD-edge endpoint adjacent to an unconsumed boundary when
+// the opposite endpoint meets only source edges consumed by the fillet.
+static int RetainedSeamEndpoint(const TopoDS_Edge& candidate,
+                                const TopoDS_Face& face,
+                                const TopoDS_Shape& source,
+                                const NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher>& consumedEdges)
+{
+  if (consumedEdges.IsEmpty())
+    return -1;
+  TopoDS_Edge edge = candidate;
+  edge.Orientation(TopAbs_FORWARD);
+  TopoDS_Vertex ends[2];
+  TopExp::Vertices(edge, ends[0], ends[1]);
+  if (ends[0].IsNull() || ends[1].IsNull() || ends[0].IsSame(ends[1]))
+    return -1;
+
+  TopLoc_Location location;
+  const occ::handle<Geom_Surface> surface = BRep_Tool::Surface(face, location);
+  if (surface.IsNull() || !surface->IsUPeriodic()
+      || !BRep_Tool::IsClosed(edge, surface, location))
+    return -1;
+  double uMin = 0., uMax = 0., vMin = 0., vMax = 0.;
+  BRepTools::UVBounds(face, uMin, uMax, vMin, vMax);
+  if (std::abs((uMax - uMin) - surface->UPeriod()) > 1.e-6)
+    return -1;
+  // A seam shared by more than one periodic source face is ambiguous here.
+  int seamFaceCount = 0;
+  for (TopExp_Explorer faceIt(source, TopAbs_FACE); faceIt.More(); faceIt.Next())
+  {
+    const TopoDS_Face sourceFace = TopoDS::Face(faceIt.Current());
+    bool containsEdge = false;
+    for (TopExp_Explorer edgeIt(sourceFace, TopAbs_EDGE); edgeIt.More(); edgeIt.Next())
+      containsEdge = containsEdge || edgeIt.Current().IsSame(edge);
+    if (!containsEdge)
+      continue;
+    TopLoc_Location sourceLocation;
+    const occ::handle<Geom_Surface> sourceSurface = BRep_Tool::Surface(sourceFace, sourceLocation);
+    if (sourceSurface.IsNull() || !sourceSurface->IsUPeriodic()
+        || !BRep_Tool::IsClosed(edge, sourceSurface, sourceLocation))
+      continue;
+    double suMin = 0., suMax = 0., svMin = 0., svMax = 0.;
+    BRepTools::UVBounds(sourceFace, suMin, suMax, svMin, svMax);
+    if (std::abs((suMax - suMin) - sourceSurface->UPeriod()) <= 1.e-6)
+      ++seamFaceCount;
+  }
+  if (seamFaceCount != 1)
+    return -1;
+
+  TopoDS_Edge reverse = edge;
+  reverse.Orientation(TopAbs_REVERSED);
+  double fFirst = 0., fLast = 0., rFirst = 0., rLast = 0.;
+  const occ::handle<Geom2d_Curve> fpc = BRep_Tool::CurveOnSurface(edge, face, fFirst, fLast);
+  const occ::handle<Geom2d_Curve> rpc = BRep_Tool::CurveOnSurface(reverse, face, rFirst, rLast);
+  if (fpc.IsNull() || rpc.IsNull())
+    return -1;
+  for (double fraction : {0., 0.5, 1.})
+  {
+    const gp_Pnt2d f = fpc->Value(fFirst + fraction * (fLast - fFirst));
+    const gp_Pnt2d r = rpc->Value(rFirst + fraction * (rLast - rFirst));
+    if (std::abs(std::abs(f.X() - r.X()) - surface->UPeriod()) > 1.e-6
+        || std::abs(f.Y() - r.Y()) > 1.e-6)
+      return -1;
+  }
+
+  bool consumed[2] = {false, false};
+  bool retained[2] = {false, false};
+  for (TopExp_Explorer it(face, TopAbs_EDGE); it.More(); it.Next())
+  {
+    const TopoDS_Edge adjacent = TopoDS::Edge(it.Current());
+    if (adjacent.IsSame(edge))
+      continue;
+    TopoDS_Vertex first, last;
+    TopExp::Vertices(adjacent, first, last);
+    for (int i = 0; i < 2; ++i)
+    {
+      if ((!first.IsNull() && ends[i].IsSame(first))
+          || (!last.IsNull() && ends[i].IsSame(last)))
+        (consumedEdges.Contains(adjacent) ? consumed[i] : retained[i]) = true;
+    }
+  }
+  if (retained[0] && !consumed[0] && consumed[1] && !retained[1])
+    return 0;
+  if (retained[1] && !consumed[1] && consumed[0] && !retained[0])
+    return 1;
+  return -1;
+}
+
+//=================================================================================================
+
 static void CompleteDS(TopOpeBRepDS_DataStructure& DStr,
                        const TopoDS_Shape&         S,
-                       const double                approximationTolerance)
+                       const double                approximationTolerance,
+                       NCollection_List<PendingSeamInterference>& pendingSeams)
 {
   ChFiDS_Map MapEW, MapFS;
   MapEW.Fill(S, TopAbs_EDGE, TopAbs_WIRE);
@@ -242,13 +340,16 @@ static void CompleteDS(TopOpeBRepDS_DataStructure& DStr,
                                                         TopOpeBRepDS_POINT,
                                                         ip,
                                                         t));
-              DStr.ChangeShapeInterferences(bestEdge).Append(
+              const occ::handle<TopOpeBRepDS_CurvePointInterference> edgeInterference =
                 new TopOpeBRepDS_CurvePointInterference(edgeTrans,
                                                         TopOpeBRepDS_EDGE,
                                                         ie,
                                                         TopOpeBRepDS_POINT,
                                                         ip,
-                                                        bestPar));
+                                                        bestPar);
+              DStr.ChangeShapeInterferences(bestEdge).Append(edgeInterference);
+              if (BRep_Tool::IsClosed(bestEdge, face))
+                pendingSeams.Append({face, bestEdge, edgeInterference});
             }
           }
           prevT = nextT;
@@ -341,13 +442,15 @@ static void CompleteDS(TopOpeBRepDS_DataStructure& DStr,
           if (!hasPoint)
           {
             const int ie = DStr.AddShape(seam);
-            DStr.ChangeShapeInterferences(seam).Append(
+            const occ::handle<TopOpeBRepDS_CurvePointInterference> edgeInterference =
               new TopOpeBRepDS_CurvePointInterference(TopOpeBRepDS_Transition(TopAbs_REVERSED),
                                                       TopOpeBRepDS_EDGE,
                                                       ie,
                                                       TopOpeBRepDS_POINT,
                                                       ip,
-                                                      seamPar));
+                                                      seamPar);
+            DStr.ChangeShapeInterferences(seam).Append(edgeInterference);
+            pendingSeams.Append({face, seam, edgeInterference});
           }
         }
         // A generated endpoint on a two-use seam must split that seam.
@@ -638,7 +741,8 @@ void ChFi3d_Builder::Compute()
     if (done)
     {
       BRep_Builder B1;
-      CompleteDS(DStr, myShape, tolapp3d);
+      NCollection_List<PendingSeamInterference> pendingSeams;
+      CompleteDS(DStr, myShape, tolapp3d, pendingSeams);
       // Update tolerances on vertex to max adjacent edges or
       // Update tolerances on degenerated edge to max of adjacent vertexes.
       TopOpeBRepDS_CurveExplorer cex(DStr);
@@ -756,6 +860,50 @@ void ChFi3d_Builder::Compute()
             consumedSpineEdges.Append(edge);
           }
         }
+      }
+      // Assign the seam transition after the final list of consumed spine
+      // edges is known. The IN split must reach the retained source boundary.
+      NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> consumedEdges;
+      for (const TopoDS_Shape& edge : consumedSpineEdges)
+        consumedEdges.Add(edge);
+      for (const PendingSeamInterference& pending : pendingSeams)
+      {
+        // A retained-end direction is not enough to classify several splits
+        // on the same source edge. Require exactly one interior DS split point.
+        int pendingCount = 0;
+        for (const PendingSeamInterference& other : pendingSeams)
+          pendingCount += other.Edge.IsSame(pending.Edge);
+        if (pendingCount != 1)
+          continue;
+        double edgeFirst = 0., edgeLast = 0.;
+        if (BRep_Tool::Curve(pending.Edge, edgeFirst, edgeLast).IsNull())
+          continue;
+        NCollection_List<double> splitParameters;
+        int innerInterferenceCount = 0;
+        TopOpeBRepDS_PointIterator pointIt = myDS->EdgePoints(pending.Edge);
+        for (; pointIt.More(); pointIt.Next())
+        {
+          const double parameter = pointIt.Parameter();
+          if (parameter <= edgeFirst + Precision::PConfusion()
+              || parameter >= edgeLast - Precision::PConfusion())
+            continue;
+          ++innerInterferenceCount;
+          bool alreadyCounted = false;
+          for (double earlier : splitParameters)
+            alreadyCounted = alreadyCounted
+                             || std::abs(parameter - earlier) <= Precision::PConfusion();
+          if (!alreadyCounted)
+            splitParameters.Append(parameter);
+        }
+        if (innerInterferenceCount != 1 || splitParameters.Extent() != 1
+            || std::abs(splitParameters.First() - pending.Interference->Parameter())
+                 > Precision::PConfusion())
+          continue;
+        const int retainedEnd =
+          RetainedSeamEndpoint(pending.Edge, pending.Face, myShape, consumedEdges);
+        if (retainedEnd >= 0)
+          pending.Interference->ChangeTransition().Set(
+            retainedEnd == 0 ? TopAbs_REVERSED : TopAbs_FORWARD);
       }
       myCoup->Perform(myDS, consumedSpineEdges);
       NCollection_Map<int>::Iterator It(MapIndSo);
