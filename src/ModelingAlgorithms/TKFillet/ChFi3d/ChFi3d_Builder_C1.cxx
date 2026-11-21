@@ -1522,7 +1522,9 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
       {
         for (int i = 1; i <= extCC.NbExt() && !intcouture; i++)
         {
-          if (extCC.SquareDistance(i) <= 1.e-8)
+          if (extCC.SquareDistance(i) <= 1.e-8
+              && extCC.PointOnE1(i).Distance(zob3d->Value(Udeb)) > tolapp3d
+              && extCC.PointOnE1(i).Distance(zob3d->Value(Ufin)) > tolapp3d)
           {
             par1                  = extCC.ParameterOnE1(i);
             par2                  = extCC.ParameterOnE2(i);

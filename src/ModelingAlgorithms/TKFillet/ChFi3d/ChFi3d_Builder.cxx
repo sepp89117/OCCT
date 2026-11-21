@@ -25,8 +25,15 @@
 
 #include <Adaptor2d_Curve2d.hxx>
 #include <Blend_FuncInv.hxx>
+#include <cmath>
 #include <BRepBlend_Line.hxx>
 #include <BRepLib.hxx>
+#include <BRepTools.hxx>
+#include <BRep_Tool.hxx>
+#include <GeomAPI_ProjectPointOnCurve.hxx>
+#include <TopOpeBRepDS_SurfaceCurveInterference.hxx>
+#include <TopOpeBRepDS_Point.hxx>
+#include <TopOpeBRepDS_Transition.hxx>
 #include <BRepTopAdaptor_TopolTool.hxx>
 #include <ChFi3d_Builder.hxx>
 #include <ChFi3d_Builder_0.hxx>
@@ -64,7 +71,9 @@
 
 //=================================================================================================
 
-static void CompleteDS(TopOpeBRepDS_DataStructure& DStr, const TopoDS_Shape& S)
+static void CompleteDS(TopOpeBRepDS_DataStructure& DStr,
+                       const TopoDS_Shape&         S,
+                       const double                approximationTolerance)
 {
   ChFiDS_Map MapEW, MapFS;
   MapEW.Fill(S, TopAbs_EDGE, TopAbs_WIRE);
@@ -125,6 +134,218 @@ static void CompleteDS(TopOpeBRepDS_DataStructure& DStr, const TopoDS_Shape& S)
       parmax     = std::max(parmax, par);
     }
     DStr.ChangeCurve(ic).SetRange(parmin, parmax);
+  }
+
+  // Split generated curves where they cross a periodic face boundary and an
+  // existing edge on that boundary.  The same DS point joins both edge sets.
+  for (TopExp_Explorer faceIt(S, TopAbs_FACE); faceIt.More(); faceIt.Next())
+  {
+    const TopoDS_Face&               face    = TopoDS::Face(faceIt.Current());
+    const occ::handle<Geom_Surface>& surface = BRep_Tool::Surface(face);
+    if (surface.IsNull() || !surface->IsUPeriodic())
+      continue;
+    double uMin, uMax, vMin, vMax;
+    BRepTools::UVBounds(face, uMin, uMax, vMin, vMax);
+    const auto& interferences = DStr.ShapeInterferences(face);
+    for (const auto& interf : interferences)
+    {
+      const auto sci = occ::down_cast<TopOpeBRepDS_SurfaceCurveInterference>(interf);
+      if (sci.IsNull() || sci->GeometryType() != TopOpeBRepDS_CURVE || sci->PCurve().IsNull())
+        continue;
+      const int ic = sci->Geometry();
+      if (ic < 1 || ic > DStr.NbCurves())
+        continue;
+      const TopOpeBRepDS_Curve& curve = DStr.Curve(ic);
+      double                    first, last;
+      if (!curve.Range(first, last) || first >= last || curve.Curve().IsNull())
+        continue;
+      const auto& pc = sci->PCurve();
+      for (double boundary : {uMin, uMax})
+      {
+        const int samples = 32;
+        double    prevT = first, prevU = pc->Value(first).X() - boundary;
+        for (int is = 1; is <= samples; ++is)
+        {
+          double nextT = first + (last - first) * double(is) / samples;
+          double nextU = pc->Value(nextT).X() - boundary;
+          if (prevU * nextU < 0.0)
+          {
+            double lo = prevT, hi = nextT;
+            for (int ib = 0; ib < 60; ++ib)
+            {
+              const double mid = 0.5 * (lo + hi);
+              const double um  = pc->Value(mid).X() - boundary;
+              if ((prevU < 0.0) == (um < 0.0))
+                lo = mid;
+              else
+                hi = mid;
+            }
+            const double t = 0.5 * (lo + hi);
+            const gp_Pnt p = curve.Curve()->Value(t);
+            TopoDS_Edge  bestEdge;
+            double       bestPar = 0.0, bestDist = RealLast();
+            for (TopExp_Explorer edgeIt(face, TopAbs_EDGE); edgeIt.More(); edgeIt.Next())
+            {
+              const TopoDS_Edge             edge = TopoDS::Edge(edgeIt.Current());
+              double                        ef, el;
+              const occ::handle<Geom_Curve> ec = BRep_Tool::Curve(edge, ef, el);
+              if (ec.IsNull() || ef >= el)
+                continue;
+              GeomAPI_ProjectPointOnCurve projection(p, ec, ef, el);
+              if (projection.NbPoints() == 0)
+                continue;
+              const double par  = projection.LowerDistanceParameter();
+              const double dist = projection.LowerDistance();
+              if (par <= ef + Precision::PConfusion() || par >= el - Precision::PConfusion())
+                continue;
+              double                          pf, pl;
+              const occ::handle<Geom2d_Curve> edgePC =
+                BRep_Tool::CurveOnSurface(edge, face, pf, pl);
+              if (edgePC.IsNull()
+                  || std::abs(edgePC->Value(par).X() - boundary) > 10.0 * Precision::PConfusion())
+                continue;
+              if (dist < bestDist)
+              {
+                bestDist = dist;
+                bestPar  = par;
+                bestEdge = edge;
+              }
+            }
+            const double edgeTolerance  = bestEdge.IsNull() ? 0.0 : BRep_Tool::Tolerance(bestEdge);
+            const double localTolerance = std::max(edgeTolerance, BRep_Tool::Tolerance(face));
+            const double tol            = std::max(approximationTolerance, localTolerance);
+            if (!bestEdge.IsNull() && bestDist <= tol && t > first + 1.0e-5 * (last - first)
+                && t < last - 1.0e-5 * (last - first))
+            {
+              double                        ef, el;
+              const occ::handle<Geom_Curve> ec     = BRep_Tool::Curve(bestEdge, ef, el);
+              const gp_Pnt                  onEdge = ec->Value(bestPar);
+              const int ip = DStr.AddPoint(TopOpeBRepDS_Point(onEdge, std::max(tol, bestDist)));
+              const int ie = DStr.AddShape(bestEdge);
+              const TopOpeBRepDS_Transition curveTrans(TopAbs_REVERSED);
+              const TopOpeBRepDS_Transition edgeTrans(TopAbs_REVERSED);
+              DStr.ChangeCurveInterferences(ic).Append(
+                new TopOpeBRepDS_CurvePointInterference(curveTrans,
+                                                        TopOpeBRepDS_CURVE,
+                                                        ic,
+                                                        TopOpeBRepDS_POINT,
+                                                        ip,
+                                                        t));
+              DStr.ChangeCurveInterferences(ic).Append(
+                new TopOpeBRepDS_CurvePointInterference(TopOpeBRepDS_Transition(TopAbs_FORWARD),
+                                                        TopOpeBRepDS_CURVE,
+                                                        ic,
+                                                        TopOpeBRepDS_POINT,
+                                                        ip,
+                                                        t));
+              DStr.ChangeShapeInterferences(bestEdge).Append(
+                new TopOpeBRepDS_CurvePointInterference(edgeTrans,
+                                                        TopOpeBRepDS_EDGE,
+                                                        ie,
+                                                        TopOpeBRepDS_POINT,
+                                                        ip,
+                                                        bestPar));
+            }
+          }
+          prevT = nextT;
+          prevU = nextU;
+        }
+      }
+    }
+  }
+
+  // A generated intersection may end exactly on the existing periodic seam.
+  // Reuse its DS endpoint and retain the complementary seam-edge segment.
+  for (TopExp_Explorer faceIt(S, TopAbs_FACE); faceIt.More(); faceIt.Next())
+  {
+    const TopoDS_Face&               face    = TopoDS::Face(faceIt.Current());
+    const occ::handle<Geom_Surface>& surface = BRep_Tool::Surface(face);
+    if (surface.IsNull() || !surface->IsUPeriodic())
+      continue;
+    double uMin, uMax, vMin, vMax;
+    BRepTools::UVBounds(face, uMin, uMax, vMin, vMax);
+    const double uvTol             = 1.e-6;
+    const auto&  faceInterferences = DStr.ShapeInterferences(face);
+    for (const auto& interf : faceInterferences)
+    {
+      const auto sci = occ::down_cast<TopOpeBRepDS_SurfaceCurveInterference>(interf);
+      if (sci.IsNull() || sci->GeometryType() != TopOpeBRepDS_CURVE || sci->PCurve().IsNull())
+        continue;
+      const int ic = sci->Geometry();
+      if (ic < 1 || ic > DStr.NbCurves())
+        continue;
+      const TopOpeBRepDS_Curve& curve = DStr.Curve(ic);
+      double                    first, last;
+      if (!curve.Range(first, last) || first >= last || curve.Curve().IsNull())
+        continue;
+      for (const double endpoint : {first, last})
+      {
+        const double u        = sci->PCurve()->Value(endpoint).X();
+        const double boundary = (std::abs(u - uMin) < uvTol) ? uMin : uMax;
+        if (std::abs(u - boundary) >= uvTol)
+          continue;
+        int ip = 0;
+        for (const auto& curveInf : DStr.CurveInterferences(ic))
+        {
+          const auto cpi = occ::down_cast<TopOpeBRepDS_CurvePointInterference>(curveInf);
+          if (!cpi.IsNull() && cpi->GeometryType() == TopOpeBRepDS_POINT
+              && std::abs(cpi->Parameter() - endpoint) < 1.e-7)
+          {
+            ip = cpi->Geometry();
+            break;
+          }
+        }
+        if (ip < 1 || ip > DStr.NbPoints())
+          continue;
+        const gp_Pnt& point = DStr.Point(ip).Point();
+        for (TopExp_Explorer edgeIt(face, TopAbs_EDGE); edgeIt.More(); edgeIt.Next())
+        {
+          const TopoDS_Edge             edge = TopoDS::Edge(edgeIt.Current());
+          double                        edgeFirst, edgeLast;
+          const occ::handle<Geom_Curve> edgeCurve = BRep_Tool::Curve(edge, edgeFirst, edgeLast);
+          if (edgeCurve.IsNull() || edgeFirst >= edgeLast)
+            continue;
+          GeomAPI_ProjectPointOnCurve projection(point, edgeCurve, edgeFirst, edgeLast);
+          if (projection.NbPoints() == 0)
+            continue;
+          const double edgePar = projection.LowerDistanceParameter();
+          if (edgePar <= edgeFirst + Precision::PConfusion()
+              || edgePar >= edgeLast - Precision::PConfusion())
+            continue;
+          const double tol =
+            std::max(approximationTolerance,
+                     std::max(BRep_Tool::Tolerance(edge), BRep_Tool::Tolerance(face)));
+          if (projection.LowerDistance() > tol)
+            continue;
+          double                          pf, pl;
+          const occ::handle<Geom2d_Curve> edgePC = BRep_Tool::CurveOnSurface(edge, face, pf, pl);
+          if (edgePC.IsNull() || std::abs(edgePC->Value(edgePar).X() - boundary) > uvTol)
+            continue;
+          bool hasForward = false, hasReverse = false;
+          for (const auto& edgeInf : DStr.ShapeInterferences(edge))
+          {
+            const auto edgeCPI = occ::down_cast<TopOpeBRepDS_CurvePointInterference>(edgeInf);
+            if (edgeCPI.IsNull() || edgeCPI->GeometryType() != TopOpeBRepDS_POINT
+                || edgeCPI->Geometry() != ip || std::abs(edgeCPI->Parameter() - edgePar) > 1.e-5)
+              continue;
+            const TopAbs_Orientation ori = edgeCPI->Transition().Orientation(TopAbs_IN);
+            hasForward                   = hasForward || ori == TopAbs_FORWARD;
+            hasReverse                   = hasReverse || ori == TopAbs_REVERSED;
+          }
+          if (hasForward && !hasReverse)
+          {
+            const int ie = DStr.Shape(edge);
+            DStr.ChangeShapeInterferences(edge).Append(
+              new TopOpeBRepDS_CurvePointInterference(TopOpeBRepDS_Transition(TopAbs_REVERSED),
+                                                      TopOpeBRepDS_EDGE,
+                                                      ie,
+                                                      TopOpeBRepDS_POINT,
+                                                      ip,
+                                                      edgePar));
+          }
+        }
+      }
+    }
   }
 }
 
@@ -334,7 +555,7 @@ void ChFi3d_Builder::Compute()
     if (done)
     {
       BRep_Builder B1;
-      CompleteDS(DStr, myShape);
+      CompleteDS(DStr, myShape, tolapp3d);
       // Update tolerances on vertex to max adjacent edges or
       // Update tolerances on degenerated edge to max of adjacent vertexes.
       TopOpeBRepDS_CurveExplorer cex(DStr);

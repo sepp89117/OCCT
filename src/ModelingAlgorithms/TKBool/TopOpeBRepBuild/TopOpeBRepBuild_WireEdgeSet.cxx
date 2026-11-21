@@ -25,6 +25,11 @@
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <BRep_Builder.hxx>
+#include <BRepTools.hxx>
+#include <TopExp.hxx>
+#include <TopoDS_Vertex.hxx>
+#include <cmath>
 #include <Geom2d_Line.hxx>
 #include <Geom_Curve.hxx>
 #include <Geom_Surface.hxx>
@@ -117,6 +122,99 @@ void TopOpeBRepBuild_WireEdgeSet::AddElement(const TopoDS_Shape& S)
 
 //=================================================================================================
 
+void TopOpeBRepBuild_WireEdgeSet::CompletePeriodicSeams()
+{
+  const occ::handle<Geom_Surface> surface = BRep_Tool::Surface(myFace);
+  if (surface.IsNull() || !surface->IsUPeriodic())
+    return;
+  double uMin, uMax, vMin, vMax;
+  BRepTools::UVBounds(myFace, uMin, uMax, vMin, vMax);
+  const double uvTol  = 10.0 * Precision::PConfusion();
+  const double period = surface->UPeriod();
+
+  for (const TopoDS_Shape& candidate : myStartShapes)
+  {
+    if (candidate.ShapeType() != TopAbs_EDGE
+        || BRep_Tool::IsClosed(TopoDS::Edge(candidate), myFace))
+      continue;
+    double                          first, last;
+    const occ::handle<Geom2d_Curve> pc =
+      BRep_Tool::CurveOnSurface(TopoDS::Edge(candidate), myFace, first, last);
+    if (pc.IsNull())
+      continue;
+    const double ua = pc->Value(first).X(), ub = pc->Value(last).X();
+    const bool   onUpper = std::abs(ua - uMax) < uvTol && std::abs(ub - uMax) < uvTol;
+    const bool   onLower = std::abs(ua - uMin) < uvTol && std::abs(ub - uMin) < uvTol;
+    if (!onUpper && !onLower)
+      continue;
+    TopoDS_Vertex va, vb;
+    TopExp::Vertices(TopoDS::Edge(candidate), va, vb);
+    if (va.IsNull() || vb.IsNull())
+      continue;
+
+    auto touchesOldSeam = [&](const TopoDS_Vertex& vertex) {
+      for (int i = 1; i <= myOMES.Extent(); ++i)
+      {
+        const TopoDS_Shape& other = myOMES.FindKey(i);
+        if (other.ShapeType() != TopAbs_EDGE || other.IsSame(candidate)
+            || !BRep_Tool::IsClosed(TopoDS::Edge(other), myFace))
+          continue;
+        TopoDS_Vertex a, b;
+        TopExp::Vertices(TopoDS::Edge(other), a, b);
+        if ((!a.IsNull() && vertex.IsSame(a)) || (!b.IsNull() && vertex.IsSame(b)))
+          return true;
+      }
+      return false;
+    };
+
+    auto meetsSplitCrossing = [&](const TopoDS_Vertex& vertex) {
+      TopoDS_Shape lowEdge, highEdge;
+      for (const TopoDS_Shape& other : myStartShapes)
+      {
+        if (other.ShapeType() != TopAbs_EDGE || other.IsSame(candidate))
+          continue;
+        TopoDS_Vertex a, b;
+        TopExp::Vertices(TopoDS::Edge(other), a, b);
+        if ((a.IsNull() || !vertex.IsSame(a)) && (b.IsNull() || !vertex.IsSame(b)))
+          continue;
+        double                          f, l;
+        const occ::handle<Geom2d_Curve> otherPC =
+          BRep_Tool::CurveOnSurface(TopoDS::Edge(other), myFace, f, l);
+        if (otherPC.IsNull())
+          continue;
+        const double u = otherPC->Value(BRep_Tool::Parameter(vertex, TopoDS::Edge(other))).X();
+        if (std::abs(u - uMin) < uvTol)
+          lowEdge = other;
+        if (std::abs(u - uMax) < uvTol)
+          highEdge = other;
+      }
+      return !lowEdge.IsNull() && !highEdge.IsNull() && !lowEdge.IsSame(highEdge);
+    };
+
+    if (!((touchesOldSeam(va) && meetsSplitCrossing(vb))
+          || (touchesOldSeam(vb) && meetsSplitCrossing(va))))
+      continue;
+
+    occ::handle<Geom2d_Curve> shifted = occ::down_cast<Geom2d_Curve>(pc->Copy());
+    shifted->Translate(gp_Vec2d(onUpper ? -period : period, 0.0));
+    BRep_Builder builder;
+    if (candidate.Orientation() == TopAbs_FORWARD)
+      builder.UpdateEdge(TopoDS::Edge(candidate),
+                         pc,
+                         shifted,
+                         myFace,
+                         BRep_Tool::Tolerance(TopoDS::Edge(candidate)));
+    else
+      builder.UpdateEdge(TopoDS::Edge(candidate),
+                         shifted,
+                         pc,
+                         myFace,
+                         BRep_Tool::Tolerance(TopoDS::Edge(candidate)));
+    TopOpeBRepBuild_ShapeSet::AddElement(candidate.Reversed());
+  }
+}
+
+//=================================================================================================
 const TopoDS_Face& TopOpeBRepBuild_WireEdgeSet::Face() const
 {
   return myFace;

@@ -24,6 +24,13 @@
 // code is involved and which license requirement needs to be resolved.
 
 #include <BRepCheck.hxx>
+#include <BRepGProp.hxx>
+#include <BRep_Tool.hxx>
+#include <GProp_GProps.hxx>
+#include <Geom_Surface.hxx>
+#include <TopoDS_Edge.hxx>
+#include <TopoDS_Vertex.hxx>
+#include <cmath>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepCheck_Status.hxx>
 #include <BRep_Builder.hxx>
@@ -473,6 +480,7 @@ void TopOpeBRepBuild_Builder::MakeFaces(const TopoDS_Shape&             aFace,
   for (FABU.InitFace(); FABU.MoreFace(); FABU.NextFace())
   {
     myBuildTool.CopyFace(aFace, newFace);
+    TopoDS_Edge openSingleEdge;
     bool hns = false;
     if (hashds)
     {
@@ -505,7 +513,25 @@ void TopOpeBRepBuild_Builder::MakeFaces(const TopoDS_Shape&             aFace,
           myBuildTool.AddWireEdge(newWire, E);
         }
       }
-      //----------- IFV
+      // A wire made from a single open edge has no enclosed face area.
+      if (!isold)
+      {
+        TopExp_Explorer oneEdge(newWire, TopAbs_EDGE);
+        if (oneEdge.More())
+        {
+          const TopoDS_Edge edge = TopoDS::Edge(oneEdge.Current());
+          oneEdge.Next();
+          if (!oneEdge.More())
+          {
+            TopoDS_Vertex firstVertex, lastVertex;
+            TopExp::Vertices(edge, firstVertex, lastVertex);
+            if (!firstVertex.IsNull() && !lastVertex.IsNull() && !firstVertex.IsSame(lastVertex))
+            {
+              openSingleEdge = edge;
+            }
+          }
+        }
+      } //----------- IFV
       if (!isold)
       {
         BRepCheck_Analyzer bca(newWire, false);
@@ -529,6 +555,29 @@ void TopOpeBRepBuild_Builder::MakeFaces(const TopoDS_Shape&             aFace,
       myBuildTool.AddFaceWire(newFace, newWire);
     }
 
+    if (!openSingleEdge.IsNull() && hashds)
+    {
+      GProp_GProps properties;
+      BRepGProp::SurfaceProperties(TopoDS::Face(newFace), properties);
+      if (std::abs(properties.Mass()) < 1.e-12)
+      {
+        // The connector was promoted to a two-use seam on a periodic face.
+        // Its former planar owner has collapsed to this open, zero-area wire.
+        bool repairedSeam = false;
+        for (int i = 1; i <= myDataStructure->NbShapes() && !repairedSeam; ++i)
+        {
+          const TopoDS_Shape& source = myDataStructure->Shape(i);
+          if (source.ShapeType() != TopAbs_FACE)
+            continue;
+          const TopoDS_Face               face    = TopoDS::Face(source);
+          const occ::handle<Geom_Surface> surface = BRep_Tool::Surface(face);
+          repairedSeam                            = !surface.IsNull() && surface->IsUPeriodic()
+                         && BRep_Tool::IsClosed(openSingleEdge, face);
+        }
+        if (repairedSeam)
+          continue;
+      }
+    }
     L.Append(newFace);
   }
 }

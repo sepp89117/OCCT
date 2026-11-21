@@ -24,6 +24,12 @@
 // code is involved and which license requirement needs to be resolved.
 
 #include <BRepClass3d_SolidClassifier.hxx>
+#include <BRep_Tool.hxx>
+#include <BRepTools.hxx>
+#include <Geom2d_Curve.hxx>
+#include <Geom_Surface.hxx>
+#include <gp_Vec2d.hxx>
+#include <cmath>
 #include <Geom_Curve.hxx>
 #include <gp_Pnt.hxx>
 #include <Precision.hxx>
@@ -382,7 +388,27 @@ void TopOpeBRepBuild_Builder::AddIntersectionEdges(TopoDS_Shape&             aFa
 
       myBuildTool.Orientation(anEdge, newori);
       const occ::handle<Geom2d_Curve>& PC = FCurves.PCurve();
-      myBuildTool.PCurve(aFace, anEdge, myDataStructure->Curve(iC), PC);
+      occ::handle<Geom2d_Curve>        adjustedPC = PC;
+      const occ::handle<Geom_Surface>  surface    = BRep_Tool::Surface(TopoDS::Face(aFace));
+      if (!PC.IsNull() && !surface.IsNull() && surface->IsUPeriodic())
+      {
+        double uMin = 0., uMax = 0., vMin = 0., vMax = 0., edgeFirst = 0., edgeLast = 0.;
+        BRepTools::UVBounds(TopoDS::Face(aFace), uMin, uMax, vMin, vMax);
+        BRep_Tool::Range(TopoDS::Edge(anEdge), edgeFirst, edgeLast);
+        const double uMid        = PC->Value(0.5 * (edgeFirst + edgeLast)).X();
+        const double period      = surface->UPeriod();
+        int          periodShift = 0;
+        if (uMid > uMax + 1.e-7)
+          periodShift = -(int)std::ceil((uMid - uMax) / period);
+        if (uMid < uMin - 1.e-7)
+          periodShift = (int)std::ceil((uMin - uMid) / period);
+        if (periodShift != 0)
+        {
+          adjustedPC = occ::down_cast<Geom2d_Curve>(PC->Copy());
+          adjustedPC->Translate(gp_Vec2d(periodShift * period, 0.));
+        }
+      }
+      myBuildTool.PCurve(aFace, anEdge, myDataStructure->Curve(iC), adjustedPC);
       WES.AddStartElement(anEdge);
     }
   }
@@ -1433,6 +1459,7 @@ void TopOpeBRepBuild_Builder::SplitFace1(const TopoDS_Shape& Foriented,
   // Add the intersection edges to edge set WES
   // -----------------------------------------
   AddIntersectionEdges(Fforward, ToBuild1, RevOri1, WES);
+  WES.CompletePeriodicSeams();
 
 #ifdef OCCT_DEBUG
   int  iF;
@@ -1936,8 +1963,32 @@ void TopOpeBRepBuild_Builder::SplitShapes(TopOpeBRepTool_ShapeExplorer& Ex,
         }
         else
         {
-          //----------------------- IFV
-          aSet.AddStartElement(newShape);
+          // A split edge promoted to the two-use seam of a periodic face
+          // cannot also bound an adjacent face. At an endpoint fillet its
+          // obsolete planar use would otherwise remain a spur.
+          bool        isPeriodicSeam = false;
+          const auto* wireSet        = dynamic_cast<TopOpeBRepBuild_WireEdgeSet*>(&aSet);
+          if (t == TopAbs_EDGE && wireSet != nullptr)
+          {
+            const TopoDS_Face&                buildingFace = wireSet->Face();
+            const TopOpeBRepDS_DataStructure& bds          = myDataStructure->DS();
+            for (int faceIndex = 1; faceIndex <= bds.NbShapes(); ++faceIndex)
+            {
+              const TopoDS_Shape& sourceShape = bds.Shape(faceIndex);
+              if (sourceShape.ShapeType() != TopAbs_FACE || sourceShape.IsSame(buildingFace))
+                continue;
+              const TopoDS_Face&              sourceFace = TopoDS::Face(sourceShape);
+              const occ::handle<Geom_Surface> surface    = BRep_Tool::Surface(sourceFace);
+              if (!surface.IsNull() && surface->IsUPeriodic()
+                  && BRep_Tool::IsClosed(TopoDS::Edge(newShape), sourceFace))
+              {
+                isPeriodicSeam = true;
+                break;
+              }
+            }
+          }
+          if (!isPeriodicSeam)
+            aSet.AddStartElement(newShape);
         }
       }
     }

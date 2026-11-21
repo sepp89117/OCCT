@@ -29,6 +29,8 @@
 
 #include <ChFi3d_Builder_0.hxx>
 
+#include <cmath>
+
 #include <AppParCurves_MultiBSpCurve.hxx>
 #include <Approx_SameParameter.hxx>
 #include <BRepLib.hxx>
@@ -4380,6 +4382,27 @@ bool ChFi3d_ComputeCurves(const occ::handle<Adaptor3d_Surface>& S1,
         dfin = 0.;
       }
       //
+      // Keep periodic surface coordinates continuous for the WLine approximation.
+      const double periods[4] = {S1->IsUPeriodic() ? S1->UPeriod() : 0.0,
+                                 S1->IsVPeriodic() ? S1->VPeriod() : 0.0,
+                                 S2->IsUPeriodic() ? S2->UPeriod() : 0.0,
+                                 S2->IsVPeriodic() ? S2->VPeriod() : 0.0};
+      for (int k = L2S->NbPoints() - 1; k >= 1; --k)
+      {
+        double uv[4], next[4];
+        L2S->Value(k).Parameters(uv[0], uv[1], uv[2], uv[3]);
+        L2S->Value(k + 1).Parameters(next[0], next[1], next[2], next[3]);
+        for (int j = 0; j < 4; ++j)
+        {
+          if (periods[j] > 0.0)
+          {
+            uv[j] += std::round((next[j] - uv[j]) / periods[j]) * periods[j];
+          }
+        }
+        IntSurf_PntOn2S point = L2S->Value(k);
+        point.SetValue(uv[0], uv[1], uv[2], uv[3]);
+        L2S->Value(k, point);
+      }
       occ::handle<IntPatch_WLine> WL = new IntPatch_WLine(L2S, false);
 
 #ifdef OCCT_DEBUG

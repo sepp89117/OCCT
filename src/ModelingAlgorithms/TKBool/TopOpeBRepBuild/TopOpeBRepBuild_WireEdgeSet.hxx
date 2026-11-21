@@ -57,6 +57,9 @@ public:
 
   Standard_EXPORT void AddElement(const TopoDS_Shape& S) override;
 
+  //! Complete a trimmed seam when two intersection edges meet at the periodic boundary.
+  Standard_EXPORT void CompletePeriodicSeams();
+
   Standard_EXPORT void InitNeighbours(const TopoDS_Shape& E) override;
 
   //! Build the list of neighbour edges of edge myCurrentShape
