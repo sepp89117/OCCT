@@ -54,6 +54,7 @@
 #include <Standard_Integer.hxx>
 #include <NCollection_Map.hxx>
 #include <TopAbs_ShapeEnum.hxx>
+#include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Edge.hxx>
@@ -264,8 +265,12 @@ static void CompleteDS(TopOpeBRepDS_DataStructure& DStr,
       continue;
     double uMin, uMax, vMin, vMax;
     BRepTools::UVBounds(face, uMin, uMax, vMin, vMax);
-    const double uvTol             = 1.e-6;
-    const auto&  faceInterferences = DStr.ShapeInterferences(face);
+    const double uvTol = 1.e-6;
+    // A periodic surface can be trimmed to a partial U-span. Its trim
+    // boundaries are not a pair of periodic seam branches.
+    if (std::abs((uMax - uMin) - surface->UPeriod()) > uvTol)
+      continue;
+    const auto& faceInterferences = DStr.ShapeInterferences(face);
     for (const auto& interf : faceInterferences)
     {
       const auto sci = occ::down_cast<TopOpeBRepDS_SurfaceCurveInterference>(interf);
@@ -300,7 +305,32 @@ static void CompleteDS(TopOpeBRepDS_DataStructure& DStr,
         const gp_Pnt& point = DStr.Point(ip).Point();
         for (TopExp_Explorer edgeIt(face, TopAbs_EDGE); edgeIt.More(); edgeIt.Next())
         {
-          const TopoDS_Edge             edge = TopoDS::Edge(edgeIt.Current());
+          const TopoDS_Edge edge = TopoDS::Edge(edgeIt.Current());
+          // A seam already has both pcurve uses; a second reverse CPI would
+          // duplicate its split point instead of retaining a connector.
+          if (BRep_Tool::IsClosed(edge, face))
+            continue;
+          // Only an edge continuing an existing seam needs the missing
+          // complementary interference. An unrelated U-boundary is a trim.
+          TopoDS_Vertex startVertex, endVertex;
+          TopExp::Vertices(edge, startVertex, endVertex);
+          bool continuesSeam = false;
+          for (TopExp_Explorer seamIt(face, TopAbs_EDGE); seamIt.More(); seamIt.Next())
+          {
+            const TopoDS_Edge seam = TopoDS::Edge(seamIt.Current());
+            if (seam.IsSame(edge) || !BRep_Tool::IsClosed(seam, face))
+              continue;
+            TopoDS_Vertex seamStart, seamEnd;
+            TopExp::Vertices(seam, seamStart, seamEnd);
+            continuesSeam = (!startVertex.IsNull()
+                             && (startVertex.IsSame(seamStart) || startVertex.IsSame(seamEnd)))
+                            || (!endVertex.IsNull()
+                                && (endVertex.IsSame(seamStart) || endVertex.IsSame(seamEnd)));
+            if (continuesSeam)
+              break;
+          }
+          if (!continuesSeam)
+            continue;
           double                        edgeFirst, edgeLast;
           const occ::handle<Geom_Curve> edgeCurve = BRep_Tool::Curve(edge, edgeFirst, edgeLast);
           if (edgeCurve.IsNull() || edgeFirst >= edgeLast)

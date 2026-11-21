@@ -1010,7 +1010,8 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
       GeomAdaptor_Curve              cur1(Ctrim->BasisCurve());
       GeomAdaptor_Curve              cur2(Cc);
       Extrema_ExtCC                  extCC(cur1, cur2);
-      if (extCC.IsDone() && extCC.NbExt() != 0)
+      // Parallel extrema may report a distance without an isolated point pair.
+      if (extCC.IsDone() && !extCC.IsParallel() && extCC.NbExt() != 0)
       {
         int    imin     = 0;
         double distmin2 = RealLast();
@@ -1518,7 +1519,8 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
       BRepLib_MakeEdge  Bedge(zob3d);
       TopoDS_Edge       edg = Bedge.Edge();
       BRepExtrema_ExtCC extCC(edgecouture, edg);
-      if (extCC.IsDone() && extCC.NbExt() != 0)
+      // Parallel extrema may report a distance without an isolated point pair.
+      if (extCC.IsDone() && !extCC.IsParallel() && extCC.NbExt() != 0)
       {
         for (int i = 1; i <= extCC.NbExt() && !intcouture; i++)
         {
@@ -5083,7 +5085,8 @@ void ChFi3d_Builder::IntersectMoreCorner(const int Index)
       GeomAdaptor_Curve              cur1(Ctrim->BasisCurve());
       GeomAdaptor_Curve              cur2(Cc);
       Extrema_ExtCC                  extCC(cur1, cur2);
-      if (extCC.IsDone() && extCC.NbExt() != 0)
+      // Parallel extrema may report a distance without an isolated point pair.
+      if (extCC.IsDone() && !extCC.IsParallel() && extCC.NbExt() != 0)
       {
         int    imin     = 0;
         double dist2min = RealLast();
