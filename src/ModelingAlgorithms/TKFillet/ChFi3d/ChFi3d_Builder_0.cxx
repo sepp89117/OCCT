@@ -29,15 +29,15 @@
 
 #include <ChFi3d_Builder_0.hxx>
 
-#include <cmath>
-
 #include <AppParCurves_MultiBSpCurve.hxx>
 #include <Approx_SameParameter.hxx>
+#include <BRepAdaptor_Surface.hxx>
 #include <BRepLib.hxx>
 #include <BRepTools.hxx>
 #include <BRepTopAdaptor_HVertex.hxx>
 #include <BRepTopAdaptor_TopolTool.hxx>
 #include <BRep_Builder.hxx>
+#include <BRep_Tool.hxx>
 #include <ChFi3d.hxx>
 #include <ChFiDS_FilSpine.hxx>
 #include <ElCLib.hxx>
@@ -4383,11 +4383,42 @@ bool ChFi3d_ComputeCurves(const occ::handle<Adaptor3d_Surface>& S1,
         dfin = 0.;
       }
       //
-      // Keep periodic surface coordinates continuous for the WLine approximation.
-      const double periods[4] = {S1->IsUPeriodic() ? S1->UPeriod() : 0.0,
-                                 S1->IsVPeriodic() ? S1->VPeriod() : 0.0,
-                                 S2->IsUPeriodic() ? S2->UPeriod() : 0.0,
-                                 S2->IsVPeriodic() ? S2->VPeriod() : 0.0};
+      // Unwrap a face adaptor only across a real seam of that face.
+      // A periodic underlying surface can be trimmed without any seam.
+      const auto seamPeriod = [](const occ::handle<Adaptor3d_Surface>& surface, bool isU) {
+        if (isU ? !surface->IsUPeriodic() : !surface->IsVPeriodic())
+          return 0.0;
+        const double period = isU ? surface->UPeriod() : surface->VPeriod();
+        const auto faceSurface = occ::down_cast<BRepAdaptor_Surface>(surface);
+        if (faceSurface.IsNull())
+          return period;
+        const TopoDS_Face& face = faceSurface->Face();
+        for (TopExp_Explorer edgeIt(face, TopAbs_EDGE); edgeIt.More(); edgeIt.Next())
+        {
+          const TopoDS_Edge edge = TopoDS::Edge(edgeIt.Current());
+          if (!BRep_Tool::IsClosed(edge, face))
+            continue;
+          TopoDS_Edge forward = edge, reverse = edge;
+          forward.Orientation(TopAbs_FORWARD);
+          reverse.Orientation(TopAbs_REVERSED);
+          double f1, l1, f2, l2;
+          const auto pc1 = BRep_Tool::CurveOnSurface(forward, face, f1, l1);
+          const auto pc2 = BRep_Tool::CurveOnSurface(reverse, face, f2, l2);
+          if (pc1.IsNull() || pc2.IsNull())
+            continue;
+          const gp_Pnt2d p1 = pc1->Value(0.5 * (f1 + l1));
+          const gp_Pnt2d p2 = pc2->Value(0.5 * (f2 + l2));
+          const double along = isU ? p1.X() - p2.X() : p1.Y() - p2.Y();
+          const double across = isU ? p1.Y() - p2.Y() : p1.X() - p2.X();
+          if (std::abs(std::abs(along) - period) <= 1.e-6 && std::abs(across) <= 1.e-6)
+            return period;
+        }
+        return 0.0;
+      };
+      const double periods[4] = {seamPeriod(S1, true),
+                                 seamPeriod(S1, false),
+                                 seamPeriod(S2, true),
+                                 seamPeriod(S2, false)};
       for (int k = L2S->NbPoints() - 1; k >= 1; --k)
       {
         double uv[4], next[4];
