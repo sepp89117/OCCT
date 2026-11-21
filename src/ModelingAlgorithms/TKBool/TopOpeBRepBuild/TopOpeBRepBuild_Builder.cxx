@@ -411,18 +411,23 @@ void TopOpeBRepBuild_Builder::AddIntersectionEdges(TopoDS_Shape&             aFa
       {
         double uMin = 0., uMax = 0., vMin = 0., vMax = 0., edgeFirst = 0., edgeLast = 0.;
         BRepTools::UVBounds(TopoDS::Face(aFace), uMin, uMax, vMin, vMax);
-        BRep_Tool::Range(TopoDS::Edge(anEdge), edgeFirst, edgeLast);
-        const double uMid        = PC->Value(0.5 * (edgeFirst + edgeLast)).X();
-        const double period      = surface->UPeriod();
-        int          periodShift = 0;
-        if (uMid > uMax + 1.e-7)
-          periodShift = -(int)std::ceil((uMid - uMax) / period);
-        if (uMid < uMin - 1.e-7)
-          periodShift = (int)std::ceil((uMin - uMid) / period);
-        if (periodShift != 0)
+        const double period = surface->UPeriod();
+        // A periodic support may be trimmed to a partial U-span. Only a face
+        // covering one full period has equivalent lower and upper seam branches.
+        if (std::abs((uMax - uMin) - period) <= 1.e-6)
         {
-          adjustedPC = occ::down_cast<Geom2d_Curve>(PC->Copy());
-          adjustedPC->Translate(gp_Vec2d(periodShift * period, 0.));
+          BRep_Tool::Range(TopoDS::Edge(anEdge), edgeFirst, edgeLast);
+          const double uMid = PC->Value(0.5 * (edgeFirst + edgeLast)).X();
+          int          periodShift = 0;
+          if (uMid > uMax + 1.e-7)
+            periodShift = -(int)std::ceil((uMid - uMax) / period);
+          if (uMid < uMin - 1.e-7)
+            periodShift = (int)std::ceil((uMin - uMid) / period);
+          if (periodShift != 0)
+          {
+            adjustedPC = occ::down_cast<Geom2d_Curve>(PC->Copy());
+            adjustedPC->Translate(gp_Vec2d(periodShift * period, 0.));
+          }
         }
       }
       myBuildTool.PCurve(aFace, anEdge, myDataStructure->Curve(iC), adjustedPC);
