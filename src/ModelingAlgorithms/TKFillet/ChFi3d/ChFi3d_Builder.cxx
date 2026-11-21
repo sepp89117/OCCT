@@ -303,6 +303,52 @@ static void CompleteDS(TopOpeBRepDS_DataStructure& DStr,
         if (ip < 1 || ip > DStr.NbPoints())
           continue;
         const gp_Pnt& point = DStr.Point(ip).Point();
+        for (TopExp_Explorer seamIt(face, TopAbs_EDGE); seamIt.More(); seamIt.Next())
+        {
+          const TopoDS_Edge seam = TopoDS::Edge(seamIt.Current());
+          if (!BRep_Tool::IsClosed(seam, face))
+            continue;
+          double                        seamFirst, seamLast;
+          const occ::handle<Geom_Curve> seamCurve = BRep_Tool::Curve(seam, seamFirst, seamLast);
+          if (seamCurve.IsNull() || seamFirst >= seamLast)
+            continue;
+          GeomAPI_ProjectPointOnCurve projection(point, seamCurve, seamFirst, seamLast);
+          if (projection.NbPoints() == 0)
+            continue;
+          const double seamPar = projection.LowerDistanceParameter();
+          if (seamPar <= seamFirst + Precision::PConfusion()
+              || seamPar >= seamLast - Precision::PConfusion())
+            continue;
+          const double tol =
+            std::max(approximationTolerance,
+                     std::max(BRep_Tool::Tolerance(seam), BRep_Tool::Tolerance(face)));
+          if (projection.LowerDistance() > tol)
+            continue;
+          bool hasPoint = false;
+          for (const auto& seamInf : DStr.ShapeInterferences(seam))
+          {
+            const auto cpi = occ::down_cast<TopOpeBRepDS_CurvePointInterference>(seamInf);
+            if (cpi.IsNull() || cpi->GeometryType() != TopOpeBRepDS_POINT || cpi->Geometry() < 1
+                || cpi->Geometry() > DStr.NbPoints())
+              continue;
+            const bool sameLocation =
+              cpi->Geometry() == ip || DStr.Point(cpi->Geometry()).Point().Distance(point) <= tol;
+            hasPoint = hasPoint || (sameLocation && std::abs(cpi->Parameter() - seamPar) < 1.e-5);
+          }
+          if (!hasPoint)
+          {
+            const int ie = DStr.AddShape(seam);
+            DStr.ChangeShapeInterferences(seam).Append(
+              new TopOpeBRepDS_CurvePointInterference(TopOpeBRepDS_Transition(TopAbs_REVERSED),
+                                                      TopOpeBRepDS_EDGE,
+                                                      ie,
+                                                      TopOpeBRepDS_POINT,
+                                                      ip,
+                                                      seamPar));
+          }
+        }
+        // A generated endpoint on a two-use seam must split that seam.
+        // A non-seam continuation instead needs the complementary use.
         for (TopExp_Explorer edgeIt(face, TopAbs_EDGE); edgeIt.More(); edgeIt.Next())
         {
           const TopoDS_Edge edge = TopoDS::Edge(edgeIt.Current());

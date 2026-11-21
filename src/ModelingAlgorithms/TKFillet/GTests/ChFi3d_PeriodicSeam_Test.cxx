@@ -389,21 +389,50 @@ TEST(ChFi3d_PeriodicSeamTest, SequentialRadialFeaturesRadiusTwo)
 
 //==================================================================================================
 
-TEST(ChFi3d_PeriodicSeamTest, UpperStepRimParallelExtremaReturnsWithoutCrash)
+TEST(ChFi3d_PeriodicSeamTest, UpperStepRimSplitsPeriodicSeamRadiusTwo)
 {
   TopoDS_Shape aInput;
   BRep_Builder aBuilder;
   ASSERT_TRUE(BRepTools::Read(aInput, fixturePath().ToCString(), aBuilder));
   const double      aRadius = 22.866527557373047;
   const TopoDS_Edge aRim = findEdge(aInput, gp_Pnt(0.0, aRadius, 10.0), gp_Pnt(aRadius, 0.0, 10.0));
+  const TopoDS_Edge aSeam = findEdge(aInput, gp_Pnt(0.0, aRadius, 0.0), gp_Pnt(0.0, aRadius, 10.0));
   ASSERT_FALSE(aRim.IsNull());
+  ASSERT_FALSE(aSeam.IsNull());
 
   BRepFilletAPI_MakeFillet aFillet(aInput, ChFi3d_Rational);
   aFillet.Add(2.0, aRim);
-  // A parallel extrema may have a distance but no isolated point pair.
-  // The builder must return a result or a controlled failure without reading that pair.
   aFillet.Build();
-  // This test guards the point query only. The full rim result remains
-  // invalid and is recorded by the separate all-edge reproducer.
+  ASSERT_TRUE(aFillet.IsDone());
   EXPECT_EQ(aFillet.NbContours(), 1);
+  ASSERT_NO_FATAL_FAILURE(checkCompleteSolid(aFillet.Shape()));
+
+  const NCollection_List<TopoDS_Shape>& aModifiedSeam = aFillet.Modified(aSeam);
+  ASSERT_FALSE(aModifiedSeam.IsEmpty());
+  bool hasLowerSeam = false;
+  for (const TopoDS_Shape& aShape : aModifiedSeam)
+  {
+    if (aShape.ShapeType() == TopAbs_EDGE)
+    {
+      hasLowerSeam = hasLowerSeam
+                     || isEdgeBetween(TopoDS::Edge(aShape),
+                                      gp_Pnt(0.0, aRadius, 0.0),
+                                      gp_Pnt(0.0, aRadius, 8.0));
+    }
+  }
+  EXPECT_TRUE(hasLowerSeam);
+
+  bool hasRadiusTwoTorus = false;
+  for (const TopoDS_Shape& aShape : aFillet.Generated(aRim))
+  {
+    if (aShape.ShapeType() != TopAbs_FACE)
+    {
+      continue;
+    }
+    BRepAdaptor_Surface aSurface(TopoDS::Face(aShape));
+    hasRadiusTwoTorus = hasRadiusTwoTorus
+                        || (aSurface.GetType() == GeomAbs_Torus
+                            && std::abs(aSurface.Torus().MinorRadius() - 2.0) < 1.0e-6);
+  }
+  EXPECT_TRUE(hasRadiusTwoTorus);
 }
