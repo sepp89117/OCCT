@@ -147,6 +147,9 @@ static void CompleteDS(TopOpeBRepDS_DataStructure& DStr,
       continue;
     double uMin, uMax, vMin, vMax;
     BRepTools::UVBounds(face, uMin, uMax, vMin, vMax);
+    // Only a complete U period has coincident lower and upper seam boundaries.
+    if (std::abs((uMax - uMin) - surface->UPeriod()) > 1.e-6)
+      continue;
     const auto& interferences = DStr.ShapeInterferences(face);
     for (const auto& interf : interferences)
     {
