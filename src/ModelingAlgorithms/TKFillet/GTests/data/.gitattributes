@@ -1,2 +1,3 @@
 PeriodicSeamSynthetic.brep -text -diff
 Issue1761_YRib.brep -text -diff
+bug28354.brep -text -diff
