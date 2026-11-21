@@ -77,7 +77,7 @@ TopoDS_Edge findHorizontalEdgeAtSeam(const TopoDS_Shape& shape)
 }
 }
 
-TEST(ChFi3dExternalBadPaths, OCC28354SeamFilletNeverReturnsInvalidSolid)
+TEST(ChFi3dExternalBadPaths, OCC28354SeamFilletProducesValidSolid)
 {
   TopoDS_Shape input;
   BRep_Builder builder;
@@ -91,8 +91,7 @@ TEST(ChFi3dExternalBadPaths, OCC28354SeamFilletNeverReturnsInvalidSolid)
   fillet.SetContinuity(GeomAbs_C1, 0.01);
   fillet.Add(2.2, seed); // The official script's second, formerly BAD construction.
   EXPECT_NO_THROW(fillet.Build());
-  if (!fillet.IsDone())
-    return;
+  ASSERT_TRUE(fillet.IsDone());
 
   const TopoDS_Shape& result = fillet.Shape();
   ASSERT_FALSE(result.IsNull());
