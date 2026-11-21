@@ -1,5 +1,3 @@
-puts "TODO OCC28354 ALL: Error: Filleting destroys shape if the filleted edge touches a seam edge"
-
 puts "============"
 puts "OCC28354"
 puts "============"
@@ -23,11 +21,17 @@ set Log_1 [whatis result_1]
 if {[regexp "shape" ${Log_1}] != 1} {
     puts "Error: Filleting destroys shape"
 }
+checkshape result_1
+bopcheck result_1
 checkview -display result_1 -2d -path ${imagedir}/${test_image}-1.png
 
-catch {blend result_2 res 2.2 res_9}
+blend result_2 res 2.2 res_9
 set Log_2 [whatis result_2]
 if {[regexp "shape" ${Log_2}] != 1} {
     puts "Error: Filleting destroys shape if the filleted edge touches a seam edge"
 }
+checkshape result_2
+bopcheck result_2
+checknbshapes result_2 -solid 1
+checkprops result_2 -v 248.013063
 checkview -display result_2 -2d -path ${imagedir}/${test_image}-2.png

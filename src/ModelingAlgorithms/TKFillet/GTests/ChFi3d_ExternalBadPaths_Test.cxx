@@ -144,7 +144,8 @@ void checkOfficialBadPath(const char* fixture,
                           double radius,
                           std::initializer_list<int> edgeIndices,
                           double expectedZMax,
-                          double expectedTorusMinorRadius = 0.0)
+                          double expectedTorusMinorRadius = 0.0,
+                          std::initializer_list<int> historySeamIndices = {})
 {
   TCollection_AsciiString path(__FILE__);
   const int slash = std::max(path.SearchFromEnd("/"), path.SearchFromEnd("\\"));
@@ -169,15 +170,52 @@ void checkOfficialBadPath(const char* fixture,
   }
   EXPECT_NO_THROW(fillet.Build());
   ASSERT_TRUE(fillet.IsDone());
-  ASSERT_GT(fillet.NbContours(), 0);
+  EXPECT_EQ(fillet.NbContours(), static_cast<int>(edgeIndices.size()));
   for (int contour = 1; contour <= fillet.NbContours(); ++contour)
     EXPECT_NEAR(fillet.Radius(contour), radius, 1.0e-9);
+  for (int index : edgeIndices)
+  {
+    const TopoDS_Edge selected = TopoDS::Edge(edges(index));
+    EXPECT_TRUE(fillet.IsDeleted(selected));
+    int generatedFaces = 0;
+    for (const TopoDS_Shape& generated : fillet.Generated(selected))
+    {
+      if (generated.ShapeType() != TopAbs_FACE)
+        continue;
+      ++generatedFaces;
+      const BRepAdaptor_Surface surface(TopoDS::Face(generated));
+      if (surface.GetType() == GeomAbs_Cylinder)
+        EXPECT_NEAR(surface.Cylinder().Radius(), radius, 1.0e-6);
+      else if (surface.GetType() == GeomAbs_Torus)
+        EXPECT_NEAR(surface.Torus().MinorRadius(), radius, 1.0e-6);
+      else
+        ADD_FAILURE() << "Selected edge generated a non-analytic fillet surface";
+    }
+    EXPECT_EQ(generatedFaces, 1);
+  }
 
   const TopoDS_Shape& result = fillet.Shape();
   ASSERT_FALSE(result.IsNull());
   ASSERT_TRUE(BRepCheck_Analyzer(result).IsValid());
   BRepAlgoAPI_Check booleanCheck(result, true, true);
   ASSERT_TRUE(booleanCheck.IsValid());
+  // Every retained part of an original technical seam must be in the output.
+  // A correct-looking solid with a stale split here breaks feature history.
+  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> resultEdges;
+  TopExp::MapShapes(result, TopAbs_EDGE, resultEdges);
+  for (int index : historySeamIndices)
+  {
+    ASSERT_GE(index, 1);
+    ASSERT_LE(index, edges.Extent());
+    const TopoDS_Edge originalSeam = TopoDS::Edge(edges(index));
+    const NCollection_List<TopoDS_Shape>& modified = fillet.Modified(originalSeam);
+    EXPECT_EQ(modified.Extent(), 1);
+    for (const TopoDS_Shape& part : modified)
+    {
+      EXPECT_EQ(part.ShapeType(), TopAbs_EDGE);
+      EXPECT_TRUE(resultEdges.Contains(part));
+    }
+  }
   int solidCount = 0;
   for (TopExp_Explorer it(result, TopAbs_SOLID); it.More(); it.Next())
     ++solidCount;
@@ -251,5 +289,6 @@ TEST(ChFi3dExternalBadPaths, OCC26655TwelveEdgesProduceValidSolid)
   // Exact official fixture SHA-256:
   // C394355D83021B35FA874C397A028B55119BD7792BF22E93760B697ECFE1B8F0.
   checkOfficialBadPath("bug26655_OCC50.brep", 1.0,
-                       {20, 10, 5, 17, 3, 4, 1, 2, 16, 11, 6, 7}, 30.0);
+                       {20, 10, 5, 17, 3, 4, 1, 2, 16, 11, 6, 7}, 30.0, 0.0,
+                       {8, 12, 14, 18});
 }
