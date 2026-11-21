@@ -265,6 +265,58 @@ TEST(ChFi3d_PeriodicSeamTest, RadialPairThenCentralRadiusTwo)
 
 //==================================================================================================
 
+TEST(ChFi3d_PeriodicSeamTest, CentralThenRadialsRadiusTwo)
+{
+  const double aRadius       = 22.866527557373047;
+  const int    anOrders[][2] = {{0, -1}, {1, -1}, {0, 1}, {1, 0}};
+  for (const auto& anOrder : anOrders)
+  {
+    SCOPED_TRACE(::testing::Message() << anOrder[0] << "," << anOrder[1]);
+    TopoDS_Shape aInput;
+    BRep_Builder aBuilder;
+    ASSERT_TRUE(BRepTools::Read(aInput, fixturePath().ToCString(), aBuilder));
+    const TopoDS_Edge aCentral = findEdge(aInput, gp_Pnt(0.0, 0.0, 10.0), gp_Pnt(0.0, 0.0, 20.0));
+    ASSERT_FALSE(aCentral.IsNull());
+
+    BRepFilletAPI_MakeFillet aFirst(aInput, ChFi3d_Rational);
+    aFirst.Add(2.0, aCentral);
+    aFirst.Build();
+    ASSERT_TRUE(aFirst.IsDone());
+    ASSERT_NO_FATAL_FAILURE(checkCompleteSolid(aFirst.Shape()));
+
+    const TopoDS_Edge aRadials[] = {
+      findEdge(aFirst.Shape(), gp_Pnt(0.0, aRadius, 10.0), gp_Pnt(0.0, 2.0, 10.0)),
+      findEdge(aFirst.Shape(), gp_Pnt(2.0, 0.0, 10.0), gp_Pnt(aRadius, 0.0, 10.0))};
+    ASSERT_FALSE(aRadials[0].IsNull());
+    ASSERT_FALSE(aRadials[1].IsNull());
+
+    BRepFilletAPI_MakeFillet aSecond(aFirst.Shape(), ChFi3d_Rational);
+    aSecond.Add(2.0, aRadials[anOrder[0]]);
+    if (anOrder[1] >= 0)
+    {
+      aSecond.Add(2.0, aRadials[anOrder[1]]);
+    }
+    aSecond.Build();
+    ASSERT_TRUE(aSecond.IsDone());
+    ASSERT_NO_FATAL_FAILURE(checkCompleteSolid(aSecond.Shape()));
+    checkGeneratedRadius(aSecond, aRadials[anOrder[0]]);
+    if (anOrder[1] >= 0)
+    {
+      checkGeneratedRadius(aSecond, aRadials[anOrder[1]]);
+    }
+
+    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> aResultEdges;
+    TopExp::MapShapes(aSecond.Shape(), TopAbs_EDGE, aResultEdges);
+    EXPECT_FALSE(aResultEdges.Contains(aRadials[anOrder[0]]));
+    if (anOrder[1] >= 0)
+    {
+      EXPECT_FALSE(aResultEdges.Contains(aRadials[anOrder[1]]));
+    }
+  }
+}
+
+//==================================================================================================
+
 TEST(ChFi3d_PeriodicSeamTest, BottomRimDoesNotDuplicateClosedSeam)
 {
   TopoDS_Shape aInput;

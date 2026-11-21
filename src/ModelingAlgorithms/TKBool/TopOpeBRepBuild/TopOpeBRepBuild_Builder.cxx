@@ -1982,11 +1982,68 @@ void TopOpeBRepBuild_Builder::SplitShapes(TopOpeBRepTool_ShapeExplorer& Ex,
               // A split of an existing seam keeps its other face use.
               // Only a non-seam edge newly promoted to a seam loses that use.
               if (!surface.IsNull() && surface->IsUPeriodic()
-                  && !BRep_Tool::IsClosed(TopoDS::Edge(aShape), sourceFace)
-                  && BRep_Tool::IsClosed(TopoDS::Edge(newShape), sourceFace))
+                  && !BRep_Tool::IsClosed(TopoDS::Edge(aShape), sourceFace))
               {
-                isPeriodicSeam = true;
-                break;
+                const TopoDS_Edge splitEdge = TopoDS::Edge(newShape);
+                if (!BRep_Tool::IsClosed(splitEdge, sourceFace))
+                {
+                  // The adjacent face may precede the periodic face. Build the
+                  // latter first when this split lies on its boundary and
+                  // continues an existing seam. CompletePeriodicSeams then
+                  // applies its full split-crossing test before promotion.
+                  const occ::handle<Geom_Surface> buildingSurface =
+                    BRep_Tool::Surface(buildingFace);
+                  if (!buildingSurface.IsNull() && !buildingSurface->IsUPeriodic())
+                  {
+                    double                          first = 0., last = 0.;
+                    const occ::handle<Geom2d_Curve> pc =
+                      BRep_Tool::CurveOnSurface(splitEdge, sourceFace, first, last);
+                    if (!pc.IsNull())
+                    {
+                      double uMin = 0., uMax = 0., vMin = 0., vMax = 0.;
+                      BRepTools::UVBounds(sourceFace, uMin, uMax, vMin, vMax);
+                      const double uvTol = 10. * Precision::PConfusion();
+                      const double ua    = pc->Value(first).X();
+                      const double ub    = pc->Value(last).X();
+                      const double um    = pc->Value(0.5 * (first + last)).X();
+                      const bool onLow = std::abs(ua - uMin) < uvTol && std::abs(ub - uMin) < uvTol
+                                         && std::abs(um - uMin) < uvTol;
+                      const bool onHigh = std::abs(ua - uMax) < uvTol && std::abs(ub - uMax) < uvTol
+                                          && std::abs(um - uMax) < uvTol;
+                      if (onLow || onHigh)
+                      {
+                        TopoDS_Vertex firstVertex, lastVertex;
+                        TopExp::Vertices(splitEdge, firstVertex, lastVertex);
+                        for (TopExp_Explorer seamIt(sourceFace, TopAbs_EDGE); seamIt.More();
+                             seamIt.Next())
+                        {
+                          const TopoDS_Edge seam = TopoDS::Edge(seamIt.Current());
+                          if (seam.IsSame(aShape) || !BRep_Tool::IsClosed(seam, sourceFace))
+                            continue;
+                          TopoDS_Vertex seamFirst, seamLast;
+                          TopExp::Vertices(seam, seamFirst, seamLast);
+                          const bool touchesOldSeam =
+                            (!firstVertex.IsNull()
+                             && ((!seamFirst.IsNull() && firstVertex.IsSame(seamFirst))
+                                 || (!seamLast.IsNull() && firstVertex.IsSame(seamLast))))
+                            || (!lastVertex.IsNull()
+                                && ((!seamFirst.IsNull() && lastVertex.IsSame(seamFirst))
+                                    || (!seamLast.IsNull() && lastVertex.IsSame(seamLast))));
+                          if (touchesOldSeam)
+                          {
+                            SplitFace(sourceShape, ToBuild1, ToBuild2);
+                            break;
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+                if (BRep_Tool::IsClosed(splitEdge, sourceFace))
+                {
+                  isPeriodicSeam = true;
+                  break;
+                }
               }
             }
           }
