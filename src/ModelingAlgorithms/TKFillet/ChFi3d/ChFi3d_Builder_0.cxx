@@ -4218,6 +4218,64 @@ bool ChFi3d_ComputeCurves(const occ::handle<Adaptor3d_Surface>& S1,
   // At this stage :
   // classic intersections have failed, the path is approached in vain.
 
+  // A raw midpoint between UVs on opposite sides of a face seam can seed
+  // the walker on the wrong periodic sheet. The forward seam pcurve gives
+  // the face's topological reference sheet for this interpolation only.
+  const auto seedSeam = [](const occ::handle<Adaptor3d_Surface>& surface,
+                           bool isU,
+                           double& forwardParameter) {
+    if (isU ? !surface->IsUPeriodic() : !surface->IsVPeriodic())
+      return 0.0;
+    const auto faceSurface = occ::down_cast<BRepAdaptor_Surface>(surface);
+    if (faceSurface.IsNull())
+      return 0.0;
+    const double period  = isU ? surface->UPeriod() : surface->VPeriod();
+    const TopoDS_Face& face = faceSurface->Face();
+    for (TopExp_Explorer edgeIt(face, TopAbs_EDGE); edgeIt.More(); edgeIt.Next())
+    {
+      const TopoDS_Edge edge = TopoDS::Edge(edgeIt.Current());
+      if (!BRep_Tool::IsClosed(edge, face))
+        continue;
+      TopoDS_Edge forward = edge, reverse = edge;
+      forward.Orientation(TopAbs_FORWARD);
+      reverse.Orientation(TopAbs_REVERSED);
+      double f1, l1, f2, l2;
+      const auto pc1 = BRep_Tool::CurveOnSurface(forward, face, f1, l1);
+      const auto pc2 = BRep_Tool::CurveOnSurface(reverse, face, f2, l2);
+      if (pc1.IsNull() || pc2.IsNull())
+        continue;
+      const gp_Pnt2d p1 = pc1->Value(0.5 * (f1 + l1));
+      const gp_Pnt2d p2 = pc2->Value(0.5 * (f2 + l2));
+      const double along  = isU ? p1.X() - p2.X() : p1.Y() - p2.Y();
+      const double across = isU ? p1.Y() - p2.Y() : p1.X() - p2.X();
+      if (std::abs(std::abs(along) - period) <= 1.e-6 && std::abs(across) <= 1.e-6)
+      {
+        forwardParameter = isU ? p1.X() : p1.Y();
+        return period;
+      }
+    }
+    return 0.0;
+  };
+  double seamAnchor[4] = {};
+  const double seedPeriods[4] = {seedSeam(S1, true, seamAnchor[0]),
+                                 seedSeam(S1, false, seamAnchor[1]),
+                                 seedSeam(S2, true, seamAnchor[2]),
+                                 seedSeam(S2, false, seamAnchor[3])};
+  double seedStart[4] = {Pardeb(1), Pardeb(2), Pardeb(3), Pardeb(4)};
+  double seedEnd[4]   = {Parfin(1), Parfin(2), Parfin(3), Parfin(4)};
+  for (int j = 0; j < 4; ++j)
+  {
+    if (seedPeriods[j] <= 0.0)
+      continue;
+    const double shift        = std::round((seedEnd[j] - seedStart[j]) / seedPeriods[j]) * seedPeriods[j];
+    const double endNearStart = seedEnd[j] - shift;
+    const double startNearEnd = seedStart[j] + shift;
+    if (std::abs(0.5 * (startNearEnd + seedEnd[j]) - seamAnchor[j])
+        < std::abs(0.5 * (seedStart[j] + endNearStart) - seamAnchor[j]))
+      seedStart[j] = startNearEnd;
+    else
+      seedEnd[j] = endNearStart;
+  }
   double Step = 0.1;
   for (;;)
   {
@@ -4238,10 +4296,10 @@ bool ChFi3d_ComputeCurves(const occ::handle<Adaptor3d_Surface>& S1,
     {
       double alpha        = 0.1 * ipdep;
       double unmoinsalpha = 1. - alpha;
-      depart(1)           = alpha * Pardeb(1) + unmoinsalpha * Parfin(1);
-      depart(2)           = alpha * Pardeb(2) + unmoinsalpha * Parfin(2);
-      depart(3)           = alpha * Pardeb(3) + unmoinsalpha * Parfin(3);
-      depart(4)           = alpha * Pardeb(4) + unmoinsalpha * Parfin(4);
+      depart(1)           = alpha * seedStart[0] + unmoinsalpha * seedEnd[0];
+      depart(2)           = alpha * seedStart[1] + unmoinsalpha * seedEnd[1];
+      depart(3)           = alpha * seedStart[2] + unmoinsalpha * seedEnd[2];
+      depart(4)           = alpha * seedStart[3] + unmoinsalpha * seedEnd[3];
       depok               = IntKK.PerformFirstPoint(depart, pintdep);
     }
     if (!depok)
