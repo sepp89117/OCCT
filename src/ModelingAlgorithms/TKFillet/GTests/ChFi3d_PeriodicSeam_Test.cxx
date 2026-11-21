@@ -492,6 +492,72 @@ TEST(ChFi3d_PeriodicSeamTest, UpperStepRimSplitsPeriodicSeamRadiusTwo)
 
 //==================================================================================================
 
+TEST(ChFi3d_PeriodicSeamTest, UpperStepRimAndSeamRadialKeepCompleteCylinder)
+{
+  const double aRadius = 22.866527557373047;
+  for (const bool reverseOrder : {false, true})
+  {
+    SCOPED_TRACE(reverseOrder);
+    TopoDS_Shape aInput;
+    BRep_Builder aBuilder;
+    ASSERT_TRUE(BRepTools::Read(aInput, fixturePath().ToCString(), aBuilder));
+    const TopoDS_Edge aRim =
+      findEdge(aInput, gp_Pnt(0.0, aRadius, 10.0), gp_Pnt(aRadius, 0.0, 10.0));
+    const TopoDS_Edge aRadial =
+      findEdge(aInput, gp_Pnt(0.0, aRadius, 10.0), gp_Pnt(0.0, 0.0, 10.0));
+    ASSERT_FALSE(aRim.IsNull());
+    ASSERT_FALSE(aRadial.IsNull());
+
+    BRepFilletAPI_MakeFillet aFillet(aInput, ChFi3d_Rational);
+    aFillet.Add(2.0, reverseOrder ? aRadial : aRim);
+    aFillet.Add(2.0, reverseOrder ? aRim : aRadial);
+    aFillet.Build();
+    ASSERT_TRUE(aFillet.IsDone());
+    ASSERT_NO_FATAL_FAILURE(checkCompleteSolid(aFillet.Shape()));
+
+    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> aResultEdges;
+    TopExp::MapShapes(aFillet.Shape(), TopAbs_EDGE, aResultEdges);
+    EXPECT_FALSE(aResultEdges.Contains(aRim));
+    EXPECT_FALSE(aResultEdges.Contains(aRadial));
+
+    // The new boundary at z=12 needs the lower continuation of the original
+    // seam-side vertical edge as a two-use seam down to the z=10 vertex.
+    const TopoDS_Edge aContinuation =
+      findEdge(aFillet.Shape(), gp_Pnt(0.0, aRadius, 10.0), gp_Pnt(0.0, aRadius, 12.0));
+    ASSERT_FALSE(aContinuation.IsNull());
+    bool hasPeriodicSeam = false;
+    for (TopExp_Explorer aFaceIt(aFillet.Shape(), TopAbs_FACE); aFaceIt.More(); aFaceIt.Next())
+    {
+      const TopoDS_Face   aFace = TopoDS::Face(aFaceIt.Current());
+      BRepAdaptor_Surface aSurface(aFace);
+      if (aSurface.GetType() == GeomAbs_Cylinder
+          && std::abs(aSurface.Cylinder().Radius() - aRadius) < 1.0e-6)
+      {
+        hasPeriodicSeam = BRep_Tool::IsClosed(aContinuation, aFace);
+        break;
+      }
+    }
+    EXPECT_TRUE(hasPeriodicSeam);
+
+    bool hasRimTorus = false;
+    for (const TopoDS_Shape& aShape : aFillet.Generated(aRim))
+    {
+      if (aShape.ShapeType() != TopAbs_FACE)
+      {
+        continue;
+      }
+      BRepAdaptor_Surface aSurface(TopoDS::Face(aShape));
+      hasRimTorus = hasRimTorus
+                    || (aSurface.GetType() == GeomAbs_Torus
+                        && std::abs(aSurface.Torus().MinorRadius() - 2.0) < 1.0e-6);
+    }
+    EXPECT_TRUE(hasRimTorus);
+    checkGeneratedRadius(aFillet, aRadial);
+  }
+}
+
+//==================================================================================================
+
 TEST(ChFi3d_PeriodicSeamTest, AllPhysicalEdgesAcrossPeriodicCornersRadiusTwo)
 {
   TopoDS_Shape aInput;

@@ -395,7 +395,11 @@ static void CompleteDS(TopOpeBRepDS_DataStructure& DStr,
             continue;
           double                          pf, pl;
           const occ::handle<Geom2d_Curve> edgePC = BRep_Tool::CurveOnSurface(edge, face, pf, pl);
-          if (edgePC.IsNull() || std::abs(edgePC->Value(edgePar).X() - boundary) > uvTol)
+          // Both U limits represent the same seam on a full-period face.
+          // The intersection curve and the continuing edge may choose opposite branches.
+          if (edgePC.IsNull()
+              || std::abs(std::remainder(edgePC->Value(edgePar).X() - boundary,
+                                         surface->UPeriod())) > uvTol)
             continue;
           bool hasForward = false, hasReverse = false;
           for (const auto& edgeInf : DStr.ShapeInterferences(edge))
