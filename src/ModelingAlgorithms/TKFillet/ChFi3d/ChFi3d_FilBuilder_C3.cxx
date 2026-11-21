@@ -68,6 +68,8 @@
 #include <TopOpeBRepDS_HDataStructure.hxx>
 #include <TopOpeBRepDS_Surface.hxx>
 
+#include <cmath>
+
 //=================================================================================================
 
 static int SearchPivot(int* s, double u[3][3], const double t)
@@ -867,13 +869,34 @@ void ChFi3d_FilBuilder::PerformThreeCorner(const int Jndex)
       occ::handle<Geom2d_Curve>      PCurveOnFace;
       if (!c1pointu)
       {
+        gp_Pnt2d aFirstOnFace = pfac1;
+        gp_Pnt2d aLastOnFace  = pfac2;
+        // The two endpoints may lie on opposite U branches of a full-period
+        // face. Use the adjacent branch for this local corner boundary.
+        if (Fac->IsUPeriodic())
+        {
+          const double aPeriod = Fac->UPeriod();
+          const double aSpan   = Fac->LastUParameter() - Fac->FirstUParameter();
+          if (aPeriod > Precision::PConfusion()
+              && std::abs(aSpan - aPeriod) <= Precision::PConfusion() * std::max(1.0, aPeriod))
+          {
+            if (aFirstOnFace.X() - aLastOnFace.X() > aPeriod / 2.0)
+            {
+              aFirstOnFace.SetX(aFirstOnFace.X() - aPeriod);
+            }
+            else if (aLastOnFace.X() - aFirstOnFace.X() > aPeriod / 2.0)
+            {
+              aLastOnFace.SetX(aLastOnFace.X() - aPeriod);
+            }
+          }
+        }
         Bfac = ChFi3d_mkbound(Fac,
                               PCurveOnFace,
                               sens[deb],
-                              pfac1,
+                              aFirstOnFace,
                               vfac1,
                               sens[fin],
-                              pfac2,
+                              aLastOnFace,
                               vfac2,
                               tolapp3d,
                               2.e-4);

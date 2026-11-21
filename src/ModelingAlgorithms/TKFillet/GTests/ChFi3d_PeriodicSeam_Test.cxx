@@ -32,6 +32,7 @@
 #include <TopExp_Explorer.hxx>
 #include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
+#include <gp_Vec.hxx>
 
 #include <gtest/gtest.h>
 
@@ -435,4 +436,89 @@ TEST(ChFi3d_PeriodicSeamTest, UpperStepRimSplitsPeriodicSeamRadiusTwo)
                             && std::abs(aSurface.Torus().MinorRadius() - 2.0) < 1.0e-6);
   }
   EXPECT_TRUE(hasRadiusTwoTorus);
+}
+
+//==================================================================================================
+
+TEST(ChFi3d_PeriodicSeamTest, AllPhysicalEdgesAcrossPeriodicCornersRadiusTwo)
+{
+  TopoDS_Shape aInput;
+  BRep_Builder aBuilder;
+  ASSERT_TRUE(BRepTools::Read(aInput, fixturePath().ToCString(), aBuilder));
+  const double aRadius         = 22.866527557373047;
+  const gp_Pnt aEndpoints[][2] = {{{0.0, aRadius, 0.0}, {0.0, aRadius, 0.0}},
+                                  {{0.0, aRadius, 10.0}, {aRadius, 0.0, 10.0}},
+                                  {{aRadius, 0.0, 10.0}, {aRadius, 0.0, 20.0}},
+                                  {{aRadius, 0.0, 20.0}, {0.0, aRadius, 20.0}},
+                                  {{0.0, aRadius, 10.0}, {0.0, aRadius, 20.0}},
+                                  {{0.0, aRadius, 10.0}, {0.0, 0.0, 10.0}},
+                                  {{0.0, 0.0, 10.0}, {aRadius, 0.0, 10.0}},
+                                  {{0.0, 0.0, 10.0}, {0.0, 0.0, 20.0}},
+                                  {{0.0, 0.0, 20.0}, {aRadius, 0.0, 20.0}},
+                                  {{0.0, aRadius, 20.0}, {0.0, 0.0, 20.0}}};
+
+  BRepFilletAPI_MakeFillet aFillet(aInput, ChFi3d_Rational);
+  TopoDS_Edge              aSeeds[10];
+  for (int anIndex = 0; anIndex < 10; ++anIndex)
+  {
+    aSeeds[anIndex] = findEdge(aInput, aEndpoints[anIndex][0], aEndpoints[anIndex][1]);
+    ASSERT_FALSE(aSeeds[anIndex].IsNull()) << anIndex;
+    aFillet.Add(2.0, aSeeds[anIndex]);
+  }
+  aFillet.Build();
+  ASSERT_TRUE(aFillet.IsDone());
+  ASSERT_NO_FATAL_FAILURE(checkCompleteSolid(aFillet.Shape()));
+
+  for (const TopoDS_Edge& aSeed : aSeeds)
+  {
+    const NCollection_List<TopoDS_Shape>& aGenerated = aFillet.Generated(aSeed);
+    ASSERT_FALSE(aGenerated.IsEmpty());
+    bool hasRadiusTwo = false;
+    for (const TopoDS_Shape& aShape : aGenerated)
+    {
+      if (aShape.ShapeType() != TopAbs_FACE)
+      {
+        continue;
+      }
+      BRepAdaptor_Surface aSurface(TopoDS::Face(aShape));
+      hasRadiusTwo = hasRadiusTwo
+                     || (aSurface.GetType() == GeomAbs_Cylinder
+                         && std::abs(aSurface.Cylinder().Radius() - 2.0) < 1.0e-6)
+                     || (aSurface.GetType() == GeomAbs_Torus
+                         && std::abs(aSurface.Torus().MinorRadius() - 2.0) < 1.0e-6);
+    }
+    EXPECT_TRUE(hasRadiusTwo);
+  }
+
+  int aSplineCorners = 0;
+  for (TopExp_Explorer aFaceIt(aFillet.Shape(), TopAbs_FACE); aFaceIt.More(); aFaceIt.Next())
+  {
+    const TopoDS_Face   aFace = TopoDS::Face(aFaceIt.Current());
+    BRepAdaptor_Surface aSurface(aFace);
+    if (aSurface.GetType() != GeomAbs_BSplineSurface)
+    {
+      continue;
+    }
+    ++aSplineCorners;
+    double uMin, uMax, vMin, vMax;
+    BRepTools::UVBounds(aFace, uMin, uMax, vMin, vMax);
+    gp_Pnt aPoint;
+    gp_Vec aDU, aDV;
+    aSurface.D1((uMin + uMax) / 2.0, (vMin + vMax) / 2.0, aPoint, aDU, aDV);
+    const gp_Vec aReferenceNormal = aDU.Crossed(aDV);
+    ASSERT_GT(aReferenceNormal.Magnitude(), 1.0e-2);
+    for (int aUIndex = 1; aUIndex < 20; ++aUIndex)
+    {
+      for (int aVIndex = 1; aVIndex < 20; ++aVIndex)
+      {
+        const double u = uMin + (uMax - uMin) * aUIndex / 20.0;
+        const double v = vMin + (vMax - vMin) * aVIndex / 20.0;
+        aSurface.D1(u, v, aPoint, aDU, aDV);
+        const gp_Vec aNormal = aDU.Crossed(aDV);
+        EXPECT_GT(aNormal.Magnitude(), 1.0e-2);
+        EXPECT_GT(aNormal.Dot(aReferenceNormal), 0.0);
+      }
+    }
+  }
+  EXPECT_EQ(aSplineCorners, 2);
 }
