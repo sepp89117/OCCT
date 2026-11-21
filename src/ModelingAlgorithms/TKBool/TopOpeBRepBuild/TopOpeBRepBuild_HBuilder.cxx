@@ -64,6 +64,15 @@ void TopOpeBRepBuild_HBuilder::Perform(const occ::handle<TopOpeBRepDS_HDataStruc
 
 //=================================================================================================
 
+void TopOpeBRepBuild_HBuilder::Perform(
+  const occ::handle<TopOpeBRepDS_HDataStructure>& HDS,
+  const NCollection_List<TopoDS_Shape>& consumedSourceEdges)
+{
+  myBuilder.TopOpeBRepBuild_Builder::Perform(HDS, consumedSourceEdges);
+}
+
+//=================================================================================================
+
 void TopOpeBRepBuild_HBuilder::Perform(const occ::handle<TopOpeBRepDS_HDataStructure>& HDS,
                                        const TopoDS_Shape&                             S1,
                                        const TopoDS_Shape&                             S2)

@@ -727,3 +727,105 @@ TEST(ChFi3d_PeriodicSeamTest, RemoteCornerStripesRemainDistinctRadiusTwo)
     }
   }
 }
+
+//==================================================================================================
+
+TEST(ChFi3d_PeriodicSeamTest, FaceBoundaryConsumesEntireUntrackedRimRadiusTwo)
+{
+  const double aRadius = 22.866527557373047;
+
+  // These are the three boundary edges of the upper horizontal face.
+  // The first order reproduces the stale original rim on the periodic cylinder;
+  // the reverse order checks that the consumed-edge decision is order independent.
+  const int anOrders[][3] = {{0, 1, 2}, {2, 1, 0}};
+  for (const auto& anOrder : anOrders)
+  {
+    SCOPED_TRACE(anOrder[0]);
+    TopoDS_Shape aInput;
+    BRep_Builder aBuilder;
+    ASSERT_TRUE(BRepTools::Read(aInput, fixturePath().ToCString(), aBuilder));
+    const TopoDS_Edge aSeeds[3] = {
+      findEdge(aInput, gp_Pnt(0.0, aRadius, 10.0), gp_Pnt(aRadius, 0.0, 10.0)),
+      findEdge(aInput, gp_Pnt(0.0, aRadius, 10.0), gp_Pnt(0.0, 0.0, 10.0)),
+      findEdge(aInput, gp_Pnt(0.0, 0.0, 10.0), gp_Pnt(aRadius, 0.0, 10.0))};
+    for (const TopoDS_Edge& aSeed : aSeeds)
+    {
+      ASSERT_FALSE(aSeed.IsNull());
+    }
+    BRepFilletAPI_MakeFillet aFillet(aInput, ChFi3d_Rational);
+    for (const int anIndex : anOrder)
+    {
+      aFillet.Add(2.0, aSeeds[anIndex]);
+    }
+    aFillet.Build();
+    ASSERT_TRUE(aFillet.IsDone());
+    const TopoDS_Shape& aResult = aFillet.Shape();
+    ASSERT_FALSE(aResult.IsNull());
+    ASSERT_TRUE(BRepCheck_Analyzer(aResult).IsValid());
+    BRepAlgoAPI_Check aCheck(aResult, true, true);
+    ASSERT_TRUE(aCheck.IsValid());
+
+    int aSolids = 0;
+    for (TopExp_Explorer anIt(aResult, TopAbs_SOLID); anIt.More(); anIt.Next())
+    {
+      ++aSolids;
+    }
+    EXPECT_EQ(aSolids, 1);
+    Bnd_Box aBounds;
+    BRepBndLib::AddOptimal(aResult, aBounds, false, false);
+    double aXMin, aYMin, aZMin, aXMax, aYMax, aZMax;
+    aBounds.Get(aXMin, aYMin, aZMin, aXMax, aYMax, aZMax);
+    EXPECT_NEAR(aZMin, 0.0, 1.0e-5);
+    EXPECT_NEAR(aZMax, 20.0, 1.0e-5);
+    GProp_GProps aProperties;
+    BRepGProp::VolumeProperties(aResult, aProperties);
+    EXPECT_GT(aProperties.Mass(), 20000.0);
+    EXPECT_LT(aProperties.Mass(), 21000.0);
+    BRepClass3d_SolidClassifier aClassifier(aResult);
+    aClassifier.Perform(gp_Pnt(0.0, 0.0, 5.0), 1.0e-7);
+    EXPECT_EQ(aClassifier.State(), TopAbs_IN);
+    aClassifier.Perform(gp_Pnt(10.0, 10.0, 5.0), 1.0e-7);
+    EXPECT_EQ(aClassifier.State(), TopAbs_IN);
+
+    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> aResultEdges;
+    TopExp::MapShapes(aResult, TopAbs_EDGE, aResultEdges);
+    for (const TopoDS_Edge& aSeed : aSeeds)
+    {
+      EXPECT_FALSE(aResultEdges.Contains(aSeed));
+      EXPECT_FALSE(aFillet.Generated(aSeed).IsEmpty());
+    }
+
+    // The upper rim creates a toroidal fillet; each radial edge creates a
+    // cylindrical fillet. Both corners must be integrated in the final solid.
+    bool hasRimTorus = false;
+    for (const TopoDS_Shape& aShape : aFillet.Generated(aSeeds[0]))
+    {
+      if (aShape.ShapeType() == TopAbs_FACE)
+      {
+        BRepAdaptor_Surface aSurface(TopoDS::Face(aShape));
+        hasRimTorus = hasRimTorus
+                      || (aSurface.GetType() == GeomAbs_Torus
+                          && std::abs(aSurface.Torus().MinorRadius() - 2.0) < 1.0e-6);
+      }
+    }
+    EXPECT_TRUE(hasRimTorus);
+    checkGeneratedRadius(aFillet, aSeeds[1]);
+    checkGeneratedRadius(aFillet, aSeeds[2]);
+
+    NCollection_IndexedDataMap<TopoDS_Shape,
+                               NCollection_List<TopoDS_Shape>,
+                               TopTools_ShapeMapHasher> anEdgeFaces;
+    TopExp::MapShapesAndAncestors(aResult, TopAbs_EDGE, TopAbs_FACE, anEdgeFaces);
+    for (int anIndex = 1; anIndex <= anEdgeFaces.Extent(); ++anIndex)
+    {
+      const TopoDS_Edge anEdge = TopoDS::Edge(anEdgeFaces.FindKey(anIndex));
+      if (!BRep_Tool::Degenerated(anEdge))
+      {
+        EXPECT_EQ(anEdgeFaces(anIndex).Size(), 2u);
+      }
+      // The input's already-valid BSpline corner also appears in the valid
+      // two-edge control with a 0.108874 mm stored tolerance.
+      EXPECT_LT(BRep_Tool::Tolerance(anEdge), 0.11);
+    }
+  }
+}

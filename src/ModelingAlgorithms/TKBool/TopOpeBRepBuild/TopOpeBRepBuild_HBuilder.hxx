@@ -51,6 +51,10 @@ public:
   //! Create shapes from the new geometries described in <HDS>.
   Standard_EXPORT void Perform(const occ::handle<TopOpeBRepDS_HDataStructure>& HDS);
 
+  //! Build while omitting fully consumed source edges from reconstructed faces.
+  Standard_EXPORT void Perform(const occ::handle<TopOpeBRepDS_HDataStructure>& HDS,
+                               const NCollection_List<TopoDS_Shape>& consumedSourceEdges);
+
   //! Same as previous + evaluates if an operation performed on shapes S1,S2
   //! is a particular case.
   Standard_EXPORT void Perform(const occ::handle<TopOpeBRepDS_HDataStructure>& HDS,

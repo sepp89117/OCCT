@@ -278,6 +278,16 @@ static void RegisterConsumedFaceEdges(
 
 void TopOpeBRepBuild_Builder::Perform(const occ::handle<TopOpeBRepDS_HDataStructure>& HDS)
 {
+  const NCollection_List<TopoDS_Shape> noConsumedEdges;
+  Perform(HDS, noConsumedEdges);
+}
+
+//=================================================================================================
+
+void TopOpeBRepBuild_Builder::Perform(
+  const occ::handle<TopOpeBRepDS_HDataStructure>& HDS,
+  const NCollection_List<TopoDS_Shape>& consumedSourceEdges)
+{
 #ifdef OCCT_DEBUG
   GdumpSHASETreset();
 #endif
@@ -307,6 +317,13 @@ void TopOpeBRepBuild_Builder::Perform(const occ::handle<TopOpeBRepDS_HDataStruct
       myConsumedFaces.Bind(aShape, true);
       RegisterConsumedFaceEdges(aShape, aReusedRestrictionEdges, myConsumedFaceEdges);
     }
+  }
+  for (const TopoDS_Shape& edge : consumedSourceEdges)
+  {
+    if (edge.IsNull() || edge.ShapeType() != TopAbs_EDGE || aReusedRestrictionEdges.IsBound(edge)
+        || myConsumedFaceEdges.IsBound(edge))
+      continue;
+    myConsumedFaceEdges.Bind(edge, true);
   }
   BuildFaces(HDS);
   myIsKPart = 0;
@@ -2193,7 +2210,8 @@ void TopOpeBRepBuild_Builder::FillShape(const TopoDS_Shape&                   S1
       // Rebuild it from those edges instead of restoring its obsolete contour.
       for (TopExp_Explorer anEdgeIt(aSubShape, TopAbs_EDGE); anEdgeIt.More(); anEdgeIt.Next())
       {
-        if (myDataStructure->HasShape(anEdgeIt.Current(), false))
+        if (myDataStructure->HasShape(anEdgeIt.Current(), false)
+            || myConsumedFaceEdges.IsBound(anEdgeIt.Current()))
         {
           hasTrackedSubShape = true;
           break;

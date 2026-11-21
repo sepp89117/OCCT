@@ -700,7 +700,61 @@ void ChFi3d_Builder::Compute()
           c.Tolerance(tolc);
         }
       }
-      myCoup->Perform(myDS);
+      // A successful stripe may consume an entire spine edge without creating
+      // a point interference on that edge when both ends are handled by corners.
+      // Tell the topological builder explicitly so it does not restore the
+      // obsolete source contour as an ordinary wire element.
+      NCollection_List<TopoDS_Shape> consumedSpineEdges;
+      for (const auto& stripe : myListStripe)
+      {
+        if (stripe.IsNull())
+          continue;
+        const auto spine = stripe->Spine();
+        const auto surfData = stripe->SetOfSurfData();
+        if (spine.IsNull() || spine->ErrorStatus() != ChFiDS_Ok || surfData.IsNull()
+            || surfData->Length() == 0)
+          continue;
+        for (int ie = 1; ie <= spine->NbEdges(); ++ie)
+        {
+          const TopoDS_Edge& edge = spine->Edges(ie);
+          if (edge.IsNull() || DStr.HasGeometry(edge) || myDS->HasSameDomain(edge)
+              || (DStr.HasShape(edge, false) && !DStr.ShapeInterferences(edge).IsEmpty()))
+            continue;
+          const double edgeFirst = spine->FirstParameter(ie);
+          const double edgeLast  = spine->LastParameter(ie);
+          if (!std::isfinite(edgeFirst) || !std::isfinite(edgeLast) || edgeLast <= edgeFirst)
+            continue;
+          const double paramTol = std::min(1.0e-5,
+                                           std::max(Precision::PConfusion(),
+                                                    1.0e-7 * (edgeLast - edgeFirst)));
+          if (edgeLast - edgeFirst <= 2.0 * paramTol)
+            continue;
+          double covered = edgeFirst;
+          while (covered < edgeLast - paramTol)
+          {
+            double next = covered;
+            for (int is = 1; is <= surfData->Length(); ++is)
+            {
+              const auto& data = surfData->Value(is);
+              if (data.IsNull())
+                continue;
+              const double first = std::min(data->FirstSpineParam(), data->LastSpineParam());
+              const double last  = std::max(data->FirstSpineParam(), data->LastSpineParam());
+              if (std::isfinite(first) && std::isfinite(last)
+                  && first <= covered + paramTol && last > next)
+                next = last;
+            }
+            if (next <= covered)
+              break;
+            covered = next;
+          }
+          if (covered >= edgeLast - paramTol)
+          {
+            consumedSpineEdges.Append(edge);
+          }
+        }
+      }
+      myCoup->Perform(myDS, consumedSpineEdges);
       NCollection_Map<int>::Iterator It(MapIndSo);
       for (; It.More(); It.Next())
       {
