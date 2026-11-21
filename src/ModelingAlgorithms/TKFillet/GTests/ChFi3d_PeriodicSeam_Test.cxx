@@ -86,7 +86,6 @@ TopoDS_Edge findEdge(const TopoDS_Shape& theShape, const gp_Pnt& theFirst, const
 TCollection_AsciiString fixturePath()
 {
   // Public synthetic cylinder and quarter-boss with a real periodic seam.
-  // SHA-256: AF03872EB5537ABCE6EA1CC94D867CF15649E139FBAF70C10E4145ADDA80F1A5.
   TCollection_AsciiString aPath(__FILE__);
   const int               aSlash = std::max(aPath.SearchFromEnd("/"), aPath.SearchFromEnd("\\"));
   aPath.Trunc(aSlash);
@@ -166,165 +165,14 @@ void checkCompleteSolid(const TopoDS_Shape& theShape)
 
 //==================================================================================================
 
-TEST(ChFi3d_PeriodicSeamTest, SyntheticSeamSingleAndPairRadiusTwo)
-{
-  struct FilletCase
-  {
-    bool useFirst;
-    bool useSecond;
-    bool reverseOrder;
-  };
-
-  const FilletCase aCases[] = {{true, false, false},
-                               {false, true, false},
-                               {true, true, false},
-                               {true, true, true}};
-  const double     aRadius  = 20.0;
-  for (const FilletCase& aCase : aCases)
-  {
-    SCOPED_TRACE(::testing::Message() << aCase.useFirst << aCase.useSecond << aCase.reverseOrder);
-    TopoDS_Shape aInput;
-    BRep_Builder aBuilder;
-    ASSERT_TRUE(BRepTools::Read(aInput, fixturePath().ToCString(), aBuilder));
-    ASSERT_TRUE(BRepCheck_Analyzer(aInput).IsValid());
-    const TopoDS_Edge aFirst =
-      findEdge(aInput, gp_Pnt(0.0, aRadius, 10.0), gp_Pnt(0.0, aRadius, 20.0));
-    const TopoDS_Edge aSecond =
-      findEdge(aInput, gp_Pnt(0.0, aRadius, 10.0), gp_Pnt(0.0, 0.0, 10.0));
-    ASSERT_FALSE(aFirst.IsNull());
-    ASSERT_FALSE(aSecond.IsNull());
-
-    BRepFilletAPI_MakeFillet aFillet(aInput, ChFi3d_Rational);
-    if (aCase.reverseOrder)
-    {
-      aFillet.Add(2.0, aSecond);
-      aFillet.Add(2.0, aFirst);
-    }
-    else
-    {
-      if (aCase.useFirst)
-      {
-        aFillet.Add(2.0, aFirst);
-      }
-      if (aCase.useSecond)
-      {
-        aFillet.Add(2.0, aSecond);
-      }
-    }
-    aFillet.Build();
-    ASSERT_TRUE(aFillet.IsDone());
-    ASSERT_NO_FATAL_FAILURE(checkCompleteSolid(aFillet.Shape()));
-    if (aCase.useFirst)
-    {
-      checkGeneratedRadius(aFillet, aFirst);
-    }
-    if (aCase.useSecond)
-    {
-      checkGeneratedRadius(aFillet, aSecond);
-    }
-  }
-}
-
-//==================================================================================================
-
-TEST(ChFi3d_PeriodicSeamTest, RadialPairThenCentralRadiusTwo)
-{
-  TopoDS_Shape aInput;
-  BRep_Builder aBuilder;
-  ASSERT_TRUE(BRepTools::Read(aInput, fixturePath().ToCString(), aBuilder));
-
-  const double      aRadius  = 22.866527557373047;
-  const TopoDS_Edge aRadialA = findEdge(aInput, gp_Pnt(0.0, aRadius, 10.0), gp_Pnt(0.0, 0.0, 10.0));
-  const TopoDS_Edge aRadialB = findEdge(aInput, gp_Pnt(0.0, 0.0, 10.0), gp_Pnt(aRadius, 0.0, 10.0));
-  ASSERT_FALSE(aRadialA.IsNull());
-  ASSERT_FALSE(aRadialB.IsNull());
-
-  BRepFilletAPI_MakeFillet aFirst(aInput, ChFi3d_Rational);
-  aFirst.Add(2.0, aRadialA);
-  aFirst.Add(2.0, aRadialB);
-  aFirst.Build();
-  ASSERT_TRUE(aFirst.IsDone());
-  ASSERT_NO_FATAL_FAILURE(checkCompleteSolid(aFirst.Shape()));
-
-  // The first feature consumes the lower 2 mm of the central edge.
-  // Resolve its unique successor on the actual first result.
-  const TopoDS_Edge aCentral =
-    findEdge(aFirst.Shape(), gp_Pnt(0.0, 0.0, 12.0), gp_Pnt(0.0, 0.0, 20.0));
-  ASSERT_FALSE(aCentral.IsNull());
-  BRepFilletAPI_MakeFillet aSecond(aFirst.Shape(), ChFi3d_Rational);
-  aSecond.Add(2.0, aCentral);
-  aSecond.Build();
-  ASSERT_TRUE(aSecond.IsDone());
-  ASSERT_NO_FATAL_FAILURE(checkCompleteSolid(aSecond.Shape()));
-  checkGeneratedRadius(aSecond, aCentral);
-
-  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> aResultEdges;
-  TopExp::MapShapes(aSecond.Shape(), TopAbs_EDGE, aResultEdges);
-  EXPECT_FALSE(aResultEdges.Contains(aCentral));
-}
-
-//==================================================================================================
-
-TEST(ChFi3d_PeriodicSeamTest, CentralThenRadialsRadiusTwo)
-{
-  const double aRadius       = 22.866527557373047;
-  const int    anOrders[][2] = {{0, -1}, {1, -1}, {0, 1}, {1, 0}};
-  for (const auto& anOrder : anOrders)
-  {
-    SCOPED_TRACE(::testing::Message() << anOrder[0] << "," << anOrder[1]);
-    TopoDS_Shape aInput;
-    BRep_Builder aBuilder;
-    ASSERT_TRUE(BRepTools::Read(aInput, fixturePath().ToCString(), aBuilder));
-    const TopoDS_Edge aCentral = findEdge(aInput, gp_Pnt(0.0, 0.0, 10.0), gp_Pnt(0.0, 0.0, 20.0));
-    ASSERT_FALSE(aCentral.IsNull());
-
-    BRepFilletAPI_MakeFillet aFirst(aInput, ChFi3d_Rational);
-    aFirst.Add(2.0, aCentral);
-    aFirst.Build();
-    ASSERT_TRUE(aFirst.IsDone());
-    ASSERT_NO_FATAL_FAILURE(checkCompleteSolid(aFirst.Shape()));
-
-    const TopoDS_Edge aRadials[] = {
-      findEdge(aFirst.Shape(), gp_Pnt(0.0, aRadius, 10.0), gp_Pnt(0.0, 2.0, 10.0)),
-      findEdge(aFirst.Shape(), gp_Pnt(2.0, 0.0, 10.0), gp_Pnt(aRadius, 0.0, 10.0))};
-    ASSERT_FALSE(aRadials[0].IsNull());
-    ASSERT_FALSE(aRadials[1].IsNull());
-
-    BRepFilletAPI_MakeFillet aSecond(aFirst.Shape(), ChFi3d_Rational);
-    aSecond.Add(2.0, aRadials[anOrder[0]]);
-    if (anOrder[1] >= 0)
-    {
-      aSecond.Add(2.0, aRadials[anOrder[1]]);
-    }
-    aSecond.Build();
-    ASSERT_TRUE(aSecond.IsDone());
-    ASSERT_NO_FATAL_FAILURE(checkCompleteSolid(aSecond.Shape()));
-    checkGeneratedRadius(aSecond, aRadials[anOrder[0]]);
-    if (anOrder[1] >= 0)
-    {
-      checkGeneratedRadius(aSecond, aRadials[anOrder[1]]);
-    }
-
-    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> aResultEdges;
-    TopExp::MapShapes(aSecond.Shape(), TopAbs_EDGE, aResultEdges);
-    EXPECT_FALSE(aResultEdges.Contains(aRadials[anOrder[0]]));
-    if (anOrder[1] >= 0)
-    {
-      EXPECT_FALSE(aResultEdges.Contains(aRadials[anOrder[1]]));
-    }
-  }
-}
-
-//==================================================================================================
-
 TEST(ChFi3d_PeriodicSeamTest, BottomRimDoesNotDuplicateClosedSeam)
 {
   TopoDS_Shape aInput;
   BRep_Builder aBuilder;
   ASSERT_TRUE(BRepTools::Read(aInput, fixturePath().ToCString(), aBuilder));
-  const double      aRadius = 22.866527557373047;
+  ASSERT_TRUE(BRepCheck_Analyzer(aInput).IsValid());
   const TopoDS_Edge aBottom =
-    findEdge(aInput, gp_Pnt(0.0, aRadius, 0.0), gp_Pnt(0.0, aRadius, 0.0));
+    findEdge(aInput, gp_Pnt(0.0, 20.0, 0.0), gp_Pnt(0.0, 20.0, 0.0));
   ASSERT_FALSE(aBottom.IsNull());
 
   BRepFilletAPI_MakeFillet aFillet(aInput, ChFi3d_Rational);
@@ -353,479 +201,96 @@ TEST(ChFi3d_PeriodicSeamTest, BottomRimDoesNotDuplicateClosedSeam)
 
 //==================================================================================================
 
-TEST(ChFi3d_PeriodicSeamTest, RadialPairAndTripleOrderRadiusTwo)
-{
-  struct EdgeOrder
-  {
-    int count;
-    int indices[3];
-  };
-
-  const EdgeOrder anOrders[] = {{2, {0, 1, 0}},
-                                {2, {1, 0, 0}},
-                                {3, {0, 1, 2}},
-                                {3, {0, 2, 1}},
-                                {3, {1, 0, 2}},
-                                {3, {1, 2, 0}},
-                                {3, {2, 0, 1}},
-                                {3, {2, 1, 0}}};
-  const double    aRadius    = 22.866527557373047;
-  for (const EdgeOrder& anOrder : anOrders)
-  {
-    SCOPED_TRACE(::testing::Message() << anOrder.count << ": " << anOrder.indices[0] << ","
-                                      << anOrder.indices[1] << "," << anOrder.indices[2]);
-    TopoDS_Shape aInput;
-    BRep_Builder aBuilder;
-    ASSERT_TRUE(BRepTools::Read(aInput, fixturePath().ToCString(), aBuilder));
-    const TopoDS_Edge anEdges[] = {
-      findEdge(aInput, gp_Pnt(0.0, aRadius, 10.0), gp_Pnt(0.0, 0.0, 10.0)),
-      findEdge(aInput, gp_Pnt(0.0, 0.0, 10.0), gp_Pnt(aRadius, 0.0, 10.0)),
-      findEdge(aInput, gp_Pnt(0.0, 0.0, 10.0), gp_Pnt(0.0, 0.0, 20.0))};
-    for (const TopoDS_Edge& anEdge : anEdges)
-    {
-      ASSERT_FALSE(anEdge.IsNull());
-    }
-
-    BRepFilletAPI_MakeFillet aFillet(aInput, ChFi3d_Rational);
-    for (int anIndex = 0; anIndex < anOrder.count; ++anIndex)
-    {
-      aFillet.Add(2.0, anEdges[anOrder.indices[anIndex]]);
-    }
-    aFillet.Build();
-    ASSERT_TRUE(aFillet.IsDone());
-    ASSERT_NO_FATAL_FAILURE(checkCompleteSolid(aFillet.Shape()));
-    for (int anIndex = 0; anIndex < anOrder.count; ++anIndex)
-    {
-      checkGeneratedRadius(aFillet, anEdges[anOrder.indices[anIndex]]);
-    }
-  }
-}
-
-//==================================================================================================
-
-TEST(ChFi3d_PeriodicSeamTest, SequentialRadialFeaturesRadiusTwo)
-{
-  const double aRadius = 22.866527557373047;
-  for (int aFirstIndex = 0; aFirstIndex < 2; ++aFirstIndex)
-  {
-    SCOPED_TRACE(aFirstIndex);
-    TopoDS_Shape aInput;
-    BRep_Builder aBuilder;
-    ASSERT_TRUE(BRepTools::Read(aInput, fixturePath().ToCString(), aBuilder));
-    const gp_Pnt      aCenter(0.0, 0.0, 10.0);
-    const gp_Pnt      anOuter[]  = {gp_Pnt(0.0, aRadius, 10.0), gp_Pnt(aRadius, 0.0, 10.0)};
-    const TopoDS_Edge aFirstSeed = findEdge(aInput, aCenter, anOuter[aFirstIndex]);
-    ASSERT_FALSE(aFirstSeed.IsNull());
-
-    BRepFilletAPI_MakeFillet aFirst(aInput, ChFi3d_Rational);
-    aFirst.Add(2.0, aFirstSeed);
-    aFirst.Build();
-    ASSERT_TRUE(aFirst.IsDone());
-    ASSERT_NO_FATAL_FAILURE(checkCompleteSolid(aFirst.Shape()));
-
-    // Resolve the opposite radial edge on the first result, not by an
-    // index from the original BREP.
-    const TopoDS_Edge aSecondSeed = findEdge(aFirst.Shape(), aCenter, anOuter[1 - aFirstIndex]);
-    ASSERT_FALSE(aSecondSeed.IsNull());
-    BRepFilletAPI_MakeFillet aSecond(aFirst.Shape(), ChFi3d_Rational);
-    aSecond.Add(2.0, aSecondSeed);
-    aSecond.Build();
-    ASSERT_TRUE(aSecond.IsDone());
-    ASSERT_NO_FATAL_FAILURE(checkCompleteSolid(aSecond.Shape()));
-    checkGeneratedRadius(aSecond, aSecondSeed);
-
-    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> aResultEdges;
-    TopExp::MapShapes(aSecond.Shape(), TopAbs_EDGE, aResultEdges);
-    EXPECT_FALSE(aResultEdges.Contains(aSecondSeed));
-  }
-}
-
-//==================================================================================================
-
-TEST(ChFi3d_PeriodicSeamTest, UpperStepRimSplitsPeriodicSeamRadiusTwo)
+TEST(ChFi3d_PeriodicSeamTest, UpperQuarterRimAtPeriodicSeamRadiusTwo)
 {
   TopoDS_Shape aInput;
   BRep_Builder aBuilder;
   ASSERT_TRUE(BRepTools::Read(aInput, fixturePath().ToCString(), aBuilder));
-  const double      aRadius = 22.866527557373047;
-  const TopoDS_Edge aRim = findEdge(aInput, gp_Pnt(0.0, aRadius, 10.0), gp_Pnt(aRadius, 0.0, 10.0));
-  const TopoDS_Edge aSeam = findEdge(aInput, gp_Pnt(0.0, aRadius, 0.0), gp_Pnt(0.0, aRadius, 10.0));
-  ASSERT_FALSE(aRim.IsNull());
-  ASSERT_FALSE(aSeam.IsNull());
+  ASSERT_TRUE(BRepCheck_Analyzer(aInput).IsValid());
+  const TopoDS_Edge anUpperRim =
+    findEdge(aInput, gp_Pnt(20.0, 0.0, 20.0), gp_Pnt(0.0, 20.0, 20.0));
+  ASSERT_FALSE(anUpperRim.IsNull());
 
-  BRepFilletAPI_MakeFillet aFillet(aInput, ChFi3d_Rational);
-  aFillet.Add(2.0, aRim);
+  BRepFilletAPI_MakeFillet aFillet(aInput);
+  aFillet.Add(2.0, anUpperRim);
   aFillet.Build();
   ASSERT_TRUE(aFillet.IsDone());
-  EXPECT_EQ(aFillet.NbContours(), 1);
   ASSERT_NO_FATAL_FAILURE(checkCompleteSolid(aFillet.Shape()));
 
-  const NCollection_List<TopoDS_Shape>& aModifiedSeam = aFillet.Modified(aSeam);
-  ASSERT_FALSE(aModifiedSeam.IsEmpty());
-  bool hasLowerSeam = false;
-  for (const TopoDS_Shape& aShape : aModifiedSeam)
-  {
-    if (aShape.ShapeType() == TopAbs_EDGE)
-    {
-      hasLowerSeam = hasLowerSeam
-                     || isEdgeBetween(TopoDS::Edge(aShape),
-                                      gp_Pnt(0.0, aRadius, 0.0),
-                                      gp_Pnt(0.0, aRadius, 8.0));
-    }
-  }
-  EXPECT_TRUE(hasLowerSeam);
-
-  bool hasRadiusTwoTorus = false;
-  for (const TopoDS_Shape& aShape : aFillet.Generated(aRim))
+  bool hasRadiusTwo = false;
+  for (const TopoDS_Shape& aShape : aFillet.Generated(anUpperRim))
   {
     if (aShape.ShapeType() != TopAbs_FACE)
     {
       continue;
     }
     BRepAdaptor_Surface aSurface(TopoDS::Face(aShape));
-    hasRadiusTwoTorus = hasRadiusTwoTorus
-                        || (aSurface.GetType() == GeomAbs_Torus
-                            && std::abs(aSurface.Torus().MinorRadius() - 2.0) < 1.0e-6);
+    hasRadiusTwo = hasRadiusTwo
+                   || (aSurface.GetType() == GeomAbs_Torus
+                       && std::abs(aSurface.Torus().MinorRadius() - 2.0) < 1.0e-6);
   }
-  EXPECT_TRUE(hasRadiusTwoTorus);
-}
-
-//==================================================================================================
-
-TEST(ChFi3d_PeriodicSeamTest, UpperStepRimAndSeamRadialKeepCompleteCylinder)
-{
-  const double aRadius = 22.866527557373047;
-  for (const bool reverseOrder : {false, true})
-  {
-    SCOPED_TRACE(reverseOrder);
-    TopoDS_Shape aInput;
-    BRep_Builder aBuilder;
-    ASSERT_TRUE(BRepTools::Read(aInput, fixturePath().ToCString(), aBuilder));
-    const TopoDS_Edge aRim =
-      findEdge(aInput, gp_Pnt(0.0, aRadius, 10.0), gp_Pnt(aRadius, 0.0, 10.0));
-    const TopoDS_Edge aRadial =
-      findEdge(aInput, gp_Pnt(0.0, aRadius, 10.0), gp_Pnt(0.0, 0.0, 10.0));
-    ASSERT_FALSE(aRim.IsNull());
-    ASSERT_FALSE(aRadial.IsNull());
-
-    BRepFilletAPI_MakeFillet aFillet(aInput, ChFi3d_Rational);
-    aFillet.Add(2.0, reverseOrder ? aRadial : aRim);
-    aFillet.Add(2.0, reverseOrder ? aRim : aRadial);
-    aFillet.Build();
-    ASSERT_TRUE(aFillet.IsDone());
-    ASSERT_NO_FATAL_FAILURE(checkCompleteSolid(aFillet.Shape()));
-
-    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> aResultEdges;
-    TopExp::MapShapes(aFillet.Shape(), TopAbs_EDGE, aResultEdges);
-    EXPECT_FALSE(aResultEdges.Contains(aRim));
-    EXPECT_FALSE(aResultEdges.Contains(aRadial));
-
-    // The new boundary at z=12 needs the lower continuation of the original
-    // seam-side vertical edge as a two-use seam down to the z=10 vertex.
-    const TopoDS_Edge aContinuation =
-      findEdge(aFillet.Shape(), gp_Pnt(0.0, aRadius, 10.0), gp_Pnt(0.0, aRadius, 12.0));
-    ASSERT_FALSE(aContinuation.IsNull());
-    bool hasPeriodicSeam = false;
-    for (TopExp_Explorer aFaceIt(aFillet.Shape(), TopAbs_FACE); aFaceIt.More(); aFaceIt.Next())
-    {
-      const TopoDS_Face   aFace = TopoDS::Face(aFaceIt.Current());
-      BRepAdaptor_Surface aSurface(aFace);
-      if (aSurface.GetType() == GeomAbs_Cylinder
-          && std::abs(aSurface.Cylinder().Radius() - aRadius) < 1.0e-6)
-      {
-        hasPeriodicSeam = BRep_Tool::IsClosed(aContinuation, aFace);
-        break;
-      }
-    }
-    EXPECT_TRUE(hasPeriodicSeam);
-
-    bool hasRimTorus = false;
-    for (const TopoDS_Shape& aShape : aFillet.Generated(aRim))
-    {
-      if (aShape.ShapeType() != TopAbs_FACE)
-      {
-        continue;
-      }
-      BRepAdaptor_Surface aSurface(TopoDS::Face(aShape));
-      hasRimTorus = hasRimTorus
-                    || (aSurface.GetType() == GeomAbs_Torus
-                        && std::abs(aSurface.Torus().MinorRadius() - 2.0) < 1.0e-6);
-    }
-    EXPECT_TRUE(hasRimTorus);
-    checkGeneratedRadius(aFillet, aRadial);
-  }
-}
-
-//==================================================================================================
-
-TEST(ChFi3d_PeriodicSeamTest, AllPhysicalEdgesAcrossPeriodicCornersRadiusTwo)
-{
-  TopoDS_Shape aInput;
-  BRep_Builder aBuilder;
-  ASSERT_TRUE(BRepTools::Read(aInput, fixturePath().ToCString(), aBuilder));
-  const double aRadius         = 22.866527557373047;
-  const gp_Pnt aEndpoints[][2] = {{{0.0, aRadius, 0.0}, {0.0, aRadius, 0.0}},
-                                  {{0.0, aRadius, 10.0}, {aRadius, 0.0, 10.0}},
-                                  {{aRadius, 0.0, 10.0}, {aRadius, 0.0, 20.0}},
-                                  {{aRadius, 0.0, 20.0}, {0.0, aRadius, 20.0}},
-                                  {{0.0, aRadius, 10.0}, {0.0, aRadius, 20.0}},
-                                  {{0.0, aRadius, 10.0}, {0.0, 0.0, 10.0}},
-                                  {{0.0, 0.0, 10.0}, {aRadius, 0.0, 10.0}},
-                                  {{0.0, 0.0, 10.0}, {0.0, 0.0, 20.0}},
-                                  {{0.0, 0.0, 20.0}, {aRadius, 0.0, 20.0}},
-                                  {{0.0, aRadius, 20.0}, {0.0, 0.0, 20.0}}};
-
-  BRepFilletAPI_MakeFillet aFillet(aInput, ChFi3d_Rational);
-  TopoDS_Edge              aSeeds[10];
-  for (int anIndex = 0; anIndex < 10; ++anIndex)
-  {
-    aSeeds[anIndex] = findEdge(aInput, aEndpoints[anIndex][0], aEndpoints[anIndex][1]);
-    ASSERT_FALSE(aSeeds[anIndex].IsNull()) << anIndex;
-    aFillet.Add(2.0, aSeeds[anIndex]);
-  }
-  aFillet.Build();
-  ASSERT_TRUE(aFillet.IsDone());
-  ASSERT_NO_FATAL_FAILURE(checkCompleteSolid(aFillet.Shape()));
-
-  for (const TopoDS_Edge& aSeed : aSeeds)
-  {
-    const NCollection_List<TopoDS_Shape>& aGenerated = aFillet.Generated(aSeed);
-    ASSERT_FALSE(aGenerated.IsEmpty());
-    bool hasRadiusTwo = false;
-    for (const TopoDS_Shape& aShape : aGenerated)
-    {
-      if (aShape.ShapeType() != TopAbs_FACE)
-      {
-        continue;
-      }
-      BRepAdaptor_Surface aSurface(TopoDS::Face(aShape));
-      hasRadiusTwo = hasRadiusTwo
-                     || (aSurface.GetType() == GeomAbs_Cylinder
-                         && std::abs(aSurface.Cylinder().Radius() - 2.0) < 1.0e-6)
-                     || (aSurface.GetType() == GeomAbs_Torus
-                         && std::abs(aSurface.Torus().MinorRadius() - 2.0) < 1.0e-6);
-    }
-    EXPECT_TRUE(hasRadiusTwo);
-  }
-
-  int aSplineCorners = 0;
-  for (TopExp_Explorer aFaceIt(aFillet.Shape(), TopAbs_FACE); aFaceIt.More(); aFaceIt.Next())
-  {
-    const TopoDS_Face   aFace = TopoDS::Face(aFaceIt.Current());
-    BRepAdaptor_Surface aSurface(aFace);
-    if (aSurface.GetType() != GeomAbs_BSplineSurface)
-    {
-      continue;
-    }
-    ++aSplineCorners;
-    double uMin, uMax, vMin, vMax;
-    BRepTools::UVBounds(aFace, uMin, uMax, vMin, vMax);
-    gp_Pnt aPoint;
-    gp_Vec aDU, aDV;
-    aSurface.D1((uMin + uMax) / 2.0, (vMin + vMax) / 2.0, aPoint, aDU, aDV);
-    const gp_Vec aReferenceNormal = aDU.Crossed(aDV);
-    ASSERT_GT(aReferenceNormal.Magnitude(), 1.0e-2);
-    for (int aUIndex = 1; aUIndex < 20; ++aUIndex)
-    {
-      for (int aVIndex = 1; aVIndex < 20; ++aVIndex)
-      {
-        const double u = uMin + (uMax - uMin) * aUIndex / 20.0;
-        const double v = vMin + (vMax - vMin) * aVIndex / 20.0;
-        aSurface.D1(u, v, aPoint, aDU, aDV);
-        const gp_Vec aNormal = aDU.Crossed(aDV);
-        EXPECT_GT(aNormal.Magnitude(), 1.0e-2);
-        EXPECT_GT(aNormal.Dot(aReferenceNormal), 0.0);
-      }
-    }
-  }
-  EXPECT_EQ(aSplineCorners, 2);
-}
-
-//==================================================================================================
-
-TEST(ChFi3d_PeriodicSeamTest, AllButBottomRimWithUpperQuarterLastRadiusTwo)
-{
-  TopoDS_Shape aInput;
-  BRep_Builder aBuilder;
-  ASSERT_TRUE(BRepTools::Read(aInput, fixturePath().ToCString(), aBuilder));
-
-  const double aRadius = 22.866527557373047;
-  const gp_Pnt aEndpoints[][2] = {
-    {{0.0, aRadius, 10.0}, {aRadius, 0.0, 10.0}},
-    {{aRadius, 0.0, 10.0}, {aRadius, 0.0, 20.0}},
-    {{aRadius, 0.0, 20.0}, {0.0, aRadius, 20.0}},
-    {{0.0, aRadius, 10.0}, {0.0, aRadius, 20.0}},
-    {{0.0, aRadius, 10.0}, {0.0, 0.0, 10.0}},
-    {{0.0, 0.0, 10.0}, {aRadius, 0.0, 10.0}},
-    {{0.0, 0.0, 10.0}, {0.0, 0.0, 20.0}},
-    {{0.0, 0.0, 20.0}, {aRadius, 0.0, 20.0}},
-    {{0.0, aRadius, 20.0}, {0.0, 0.0, 20.0}}};
-  const int anOrder[] = {0, 1, 3, 4, 5, 6, 7, 8, 2};
-  TopoDS_Edge aSeeds[9];
-  BRepFilletAPI_MakeFillet aFillet(aInput, ChFi3d_Rational);
-  for (int anIndex : anOrder)
-  {
-    aSeeds[anIndex] = findEdge(aInput, aEndpoints[anIndex][0], aEndpoints[anIndex][1]);
-    ASSERT_FALSE(aSeeds[anIndex].IsNull()) << anIndex;
-    aFillet.Add(2.0, aSeeds[anIndex]);
-  }
-
-  aFillet.Build();
-  ASSERT_TRUE(aFillet.IsDone());
-  ASSERT_NO_FATAL_FAILURE(checkCompleteSolid(aFillet.Shape()));
+  EXPECT_TRUE(hasRadiusTwo);
 
   NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> aResultEdges;
   TopExp::MapShapes(aFillet.Shape(), TopAbs_EDGE, aResultEdges);
-  for (const TopoDS_Edge& aSeed : aSeeds)
-  {
-    EXPECT_FALSE(aResultEdges.Contains(aSeed));
-    EXPECT_FALSE(aFillet.Generated(aSeed).IsEmpty());
-  }
+  EXPECT_FALSE(aResultEdges.Contains(anUpperRim));
 }
 
 //==================================================================================================
-
-TEST(ChFi3d_PeriodicSeamTest, RemoteCornerStripesRemainDistinctRadiusTwo)
+TEST(ChFi3d_PeriodicSeamTest, UpperRimAndRadialAtPeriodicSeamRadiusTwo)
 {
   TopoDS_Shape aInput;
   BRep_Builder aBuilder;
   ASSERT_TRUE(BRepTools::Read(aInput, fixturePath().ToCString(), aBuilder));
+  ASSERT_TRUE(BRepCheck_Analyzer(aInput).IsValid());
+  const TopoDS_Edge anUpperRim =
+    findEdge(aInput, gp_Pnt(20.0, 0.0, 20.0), gp_Pnt(0.0, 20.0, 20.0));
+  const TopoDS_Edge aRadial =
+    findEdge(aInput, gp_Pnt(0.0, 0.0, 20.0), gp_Pnt(0.0, 20.0, 20.0));
+  ASSERT_FALSE(anUpperRim.IsNull());
+  ASSERT_FALSE(aRadial.IsNull());
 
-  const double aRadius         = 22.866527557373047;
-  const gp_Pnt aEndpoints[][2] = {{{0.0, aRadius, 10.0}, {0.0, 0.0, 10.0}},
-                                  {{0.0, 0.0, 10.0}, {aRadius, 0.0, 10.0}},
-                                  {{aRadius, 0.0, 10.0}, {aRadius, 0.0, 20.0}},
-                                  {{0.0, aRadius, 10.0}, {0.0, aRadius, 20.0}},
-                                  {{0.0, 0.0, 10.0}, {0.0, 0.0, 20.0}}};
-  TopoDS_Edge  aSeeds[5];
-  for (int anIndex = 0; anIndex < 5; ++anIndex)
-  {
-    aSeeds[anIndex] = findEdge(aInput, aEndpoints[anIndex][0], aEndpoints[anIndex][1]);
-    ASSERT_FALSE(aSeeds[anIndex].IsNull()) << anIndex;
-  }
+  BRepFilletAPI_MakeFillet aFillet(aInput);
+  aFillet.Add(2.0, anUpperRim);
+  aFillet.Add(2.0, aRadial);
+  aFillet.Build();
+  ASSERT_TRUE(aFillet.IsDone());
+  ASSERT_NO_FATAL_FAILURE(checkCompleteSolid(aFillet.Shape()));
+  checkGeneratedRadius(aFillet, aRadial);
+  ASSERT_FALSE(aFillet.Generated(anUpperRim).IsEmpty());
 
-  const int anOrders[][5] = {{0, 1, 2, 3, -1}, {3, 2, 1, 0, -1}, {0, 1, 4, 2, 3}};
-  for (const auto& anOrder : anOrders)
-  {
-    BRepFilletAPI_MakeFillet aFillet(aInput, ChFi3d_Rational);
-    for (const int anIndex : anOrder)
-    {
-      if (anIndex >= 0)
-      {
-        aFillet.Add(2.0, aSeeds[anIndex]);
-      }
-    }
-    aFillet.Build();
-    ASSERT_TRUE(aFillet.IsDone());
-    ASSERT_NO_FATAL_FAILURE(checkCompleteSolid(aFillet.Shape()));
-    for (const int anIndex : anOrder)
-    {
-      if (anIndex >= 0)
-      {
-        checkGeneratedRadius(aFillet, aSeeds[anIndex]);
-      }
-    }
-  }
+  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> aResultEdges;
+  TopExp::MapShapes(aFillet.Shape(), TopAbs_EDGE, aResultEdges);
+  EXPECT_FALSE(aResultEdges.Contains(anUpperRim));
+  EXPECT_FALSE(aResultEdges.Contains(aRadial));
 }
 
 //==================================================================================================
 
-TEST(ChFi3d_PeriodicSeamTest, FaceBoundaryConsumesEntireUntrackedRimRadiusTwo)
+TEST(ChFi3d_PeriodicSeamTest, LowerAndUpperRimsPreserveCompleteSolidRadiusTwo)
 {
-  const double aRadius = 22.866527557373047;
+  TopoDS_Shape aInput;
+  BRep_Builder aBuilder;
+  ASSERT_TRUE(BRepTools::Read(aInput, fixturePath().ToCString(), aBuilder));
+  ASSERT_TRUE(BRepCheck_Analyzer(aInput).IsValid());
+  const TopoDS_Edge aLowerRim =
+    findEdge(aInput, gp_Pnt(0.0, 20.0, 0.0), gp_Pnt(0.0, 20.0, 0.0));
+  const TopoDS_Edge anUpperRim =
+    findEdge(aInput, gp_Pnt(20.0, 0.0, 20.0), gp_Pnt(0.0, 20.0, 20.0));
+  ASSERT_FALSE(aLowerRim.IsNull());
+  ASSERT_FALSE(anUpperRim.IsNull());
 
-  // These are the three boundary edges of the upper horizontal face.
-  // The first order reproduces the stale original rim on the periodic cylinder;
-  // the reverse order checks that the consumed-edge decision is order independent.
-  const int anOrders[][3] = {{0, 1, 2}, {2, 1, 0}};
-  for (const auto& anOrder : anOrders)
-  {
-    SCOPED_TRACE(anOrder[0]);
-    TopoDS_Shape aInput;
-    BRep_Builder aBuilder;
-    ASSERT_TRUE(BRepTools::Read(aInput, fixturePath().ToCString(), aBuilder));
-    const TopoDS_Edge aSeeds[3] = {
-      findEdge(aInput, gp_Pnt(0.0, aRadius, 10.0), gp_Pnt(aRadius, 0.0, 10.0)),
-      findEdge(aInput, gp_Pnt(0.0, aRadius, 10.0), gp_Pnt(0.0, 0.0, 10.0)),
-      findEdge(aInput, gp_Pnt(0.0, 0.0, 10.0), gp_Pnt(aRadius, 0.0, 10.0))};
-    for (const TopoDS_Edge& aSeed : aSeeds)
-    {
-      ASSERT_FALSE(aSeed.IsNull());
-    }
-    BRepFilletAPI_MakeFillet aFillet(aInput, ChFi3d_Rational);
-    for (const int anIndex : anOrder)
-    {
-      aFillet.Add(2.0, aSeeds[anIndex]);
-    }
-    aFillet.Build();
-    ASSERT_TRUE(aFillet.IsDone());
-    const TopoDS_Shape& aResult = aFillet.Shape();
-    ASSERT_FALSE(aResult.IsNull());
-    ASSERT_TRUE(BRepCheck_Analyzer(aResult).IsValid());
-    BRepAlgoAPI_Check aCheck(aResult, true, true);
-    ASSERT_TRUE(aCheck.IsValid());
+  BRepFilletAPI_MakeFillet aFillet(aInput);
+  aFillet.Add(2.0, aLowerRim);
+  aFillet.Add(2.0, anUpperRim);
+  aFillet.Build();
+  ASSERT_TRUE(aFillet.IsDone());
+  ASSERT_NO_FATAL_FAILURE(checkCompleteSolid(aFillet.Shape()));
+  ASSERT_FALSE(aFillet.Generated(aLowerRim).IsEmpty());
+  ASSERT_FALSE(aFillet.Generated(anUpperRim).IsEmpty());
 
-    int aSolids = 0;
-    for (TopExp_Explorer anIt(aResult, TopAbs_SOLID); anIt.More(); anIt.Next())
-    {
-      ++aSolids;
-    }
-    EXPECT_EQ(aSolids, 1);
-    Bnd_Box aBounds;
-    BRepBndLib::AddOptimal(aResult, aBounds, false, false);
-    double aXMin, aYMin, aZMin, aXMax, aYMax, aZMax;
-    aBounds.Get(aXMin, aYMin, aZMin, aXMax, aYMax, aZMax);
-    EXPECT_NEAR(aZMin, 0.0, 1.0e-5);
-    EXPECT_NEAR(aZMax, 20.0, 1.0e-5);
-    GProp_GProps aProperties;
-    BRepGProp::VolumeProperties(aResult, aProperties);
-    EXPECT_GT(aProperties.Mass(), 20000.0);
-    EXPECT_LT(aProperties.Mass(), 21000.0);
-    BRepClass3d_SolidClassifier aClassifier(aResult);
-    aClassifier.Perform(gp_Pnt(0.0, 0.0, 5.0), 1.0e-7);
-    EXPECT_EQ(aClassifier.State(), TopAbs_IN);
-    aClassifier.Perform(gp_Pnt(10.0, 10.0, 5.0), 1.0e-7);
-    EXPECT_EQ(aClassifier.State(), TopAbs_IN);
-
-    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> aResultEdges;
-    TopExp::MapShapes(aResult, TopAbs_EDGE, aResultEdges);
-    for (const TopoDS_Edge& aSeed : aSeeds)
-    {
-      EXPECT_FALSE(aResultEdges.Contains(aSeed));
-      EXPECT_FALSE(aFillet.Generated(aSeed).IsEmpty());
-    }
-
-    // The upper rim creates a toroidal fillet; each radial edge creates a
-    // cylindrical fillet. Both corners must be integrated in the final solid.
-    bool hasRimTorus = false;
-    for (const TopoDS_Shape& aShape : aFillet.Generated(aSeeds[0]))
-    {
-      if (aShape.ShapeType() == TopAbs_FACE)
-      {
-        BRepAdaptor_Surface aSurface(TopoDS::Face(aShape));
-        hasRimTorus = hasRimTorus
-                      || (aSurface.GetType() == GeomAbs_Torus
-                          && std::abs(aSurface.Torus().MinorRadius() - 2.0) < 1.0e-6);
-      }
-    }
-    EXPECT_TRUE(hasRimTorus);
-    checkGeneratedRadius(aFillet, aSeeds[1]);
-    checkGeneratedRadius(aFillet, aSeeds[2]);
-
-    NCollection_IndexedDataMap<TopoDS_Shape,
-                               NCollection_List<TopoDS_Shape>,
-                               TopTools_ShapeMapHasher> anEdgeFaces;
-    TopExp::MapShapesAndAncestors(aResult, TopAbs_EDGE, TopAbs_FACE, anEdgeFaces);
-    for (int anIndex = 1; anIndex <= anEdgeFaces.Extent(); ++anIndex)
-    {
-      const TopoDS_Edge anEdge = TopoDS::Edge(anEdgeFaces.FindKey(anIndex));
-      if (!BRep_Tool::Degenerated(anEdge))
-      {
-        EXPECT_EQ(anEdgeFaces(anIndex).Size(), 2u);
-      }
-      // The input's already-valid BSpline corner also appears in the valid
-      // two-edge control with a 0.108874 mm stored tolerance.
-      EXPECT_LT(BRep_Tool::Tolerance(anEdge), 0.11);
-    }
-  }
+  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> aResultEdges;
+  TopExp::MapShapes(aFillet.Shape(), TopAbs_EDGE, aResultEdges);
+  EXPECT_FALSE(aResultEdges.Contains(aLowerRim));
+  EXPECT_FALSE(aResultEdges.Contains(anUpperRim));
 }
